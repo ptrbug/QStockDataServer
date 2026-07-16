@@ -1,0 +1,21 @@
+[Unit]
+Description=QStockDataServer
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=qstock
+Group=qstock
+WorkingDirectory=/opt/QStockDataServer
+ExecStart=/opt/QStockDataServer/.venv/bin/python /opt/QStockDataServer/server.py serve --config /opt/QStockDataServer/config.yaml
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=10
+RestartPreventExitStatus=2 4 5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
