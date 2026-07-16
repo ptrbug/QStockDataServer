@@ -375,6 +375,14 @@ class DuckDBManager:
             ).fetchall()
         return {row[0] for row in rows}
 
+    def get_stock_symbols(self) -> set[str]:
+        with self.connect(read_only=True) as connection:
+            rows = connection.execute(
+                "SELECT symbol FROM main_board_stock_list "
+                "UNION SELECT symbol FROM gem_board_stock_list"
+            ).fetchall()
+        return {row[0] for row in rows}
+
     def import_symbol_history(
         self, frame: pd.DataFrame, board: str, target_date: date
     ) -> int:
@@ -452,6 +460,49 @@ class DuckDBManager:
                     raise
                 raise StorageError(f"导入 {symbol} 历史行情失败：{exc}") from exc
 
+    def _replace_new_symbol_history(
+        self,
+        connection: duckdb.DuckDBPyConnection,
+        frame: pd.DataFrame,
+        stock: pd.DataFrame,
+        target_date: date,
+    ) -> int:
+        if len(stock) != 1:
+            raise FatalDataError("新增股票回补必须且只能提供一条证券信息")
+        symbol = str(stock.iloc[0]["symbol"])
+        board = str(stock.iloc[0]["board"])
+        if board not in DAILY_TABLES:
+            raise ConfigurationError(f"未知板块：{board}")
+        adjusted, events = calculate_qfq_factors(frame, self.config.factor_epsilon)
+        if not adjusted["symbol"].eq(symbol).all():
+            raise FatalDataError(f"新增股票 {symbol} 的证券信息与历史行情代码不一致")
+        table = DAILY_TABLES[board]
+        daily_columns = [
+            "symbol", "date", "open", "high", "low", "close", "preclose",
+            "volume", "amount", "trade_status", "qfq_factor",
+        ]
+        connection.execute("DELETE FROM main_board_daily WHERE symbol=?", [symbol])
+        connection.execute("DELETE FROM gem_board_daily WHERE symbol=?", [symbol])
+        connection.execute("DELETE FROM adjustment_events WHERE symbol=?", [symbol])
+        self._upsert_stock_list(connection, stock, target_date)
+        with self._registered(connection, adjusted[daily_columns]) as stage:
+            connection.execute(
+                f"INSERT INTO {table}({', '.join(daily_columns)}) "
+                f"SELECT {', '.join(daily_columns)} FROM {stage}"
+            )
+        if not events.empty:
+            with self._registered(connection, events) as event_stage:
+                connection.execute(
+                    """
+                    INSERT INTO adjustment_events(
+                        symbol, ex_date, previous_close, preclose, event_factor
+                    )
+                    SELECT symbol, ex_date, previous_close, preclose, event_factor
+                    FROM {event_stage}
+                    """.format(event_stage=event_stage)
+                )
+        return len(adjusted)
+
     def complete_initial_import(self, expected_symbols: set[str], target_date: date) -> None:
         with self.connect() as connection:
             try:
@@ -499,8 +550,57 @@ class DuckDBManager:
             [trade_date, trade_date],
         ).fetchdf()
 
+    def _existing_daily_symbols(
+        self,
+        connection: duckdb.DuckDBPyConnection,
+        daily: pd.DataFrame,
+        trade_date: date,
+    ) -> set[str]:
+        existing = connection.execute(
+            """
+            SELECT symbol, date, open, high, low, close, preclose, volume, amount,
+                   trade_status, 'main' AS board
+            FROM main_board_daily WHERE date=?
+            UNION ALL
+            SELECT symbol, date, open, high, low, close, preclose, volume, amount,
+                   trade_status, 'gem' AS board
+            FROM gem_board_daily WHERE date=?
+            """,
+            [trade_date, trade_date],
+        ).fetchdf()
+        expected_symbols = set(daily["symbol"])
+        existing = existing.loc[existing["symbol"].isin(expected_symbols)].copy()
+        if existing.empty:
+            return set()
+        if existing["symbol"].duplicated().any():
+            raise FatalDataError(f"{trade_date} 已有日线出现跨表或表内重复代码")
+        incoming = daily.set_index("symbol")
+        for row in existing.itertuples(index=False):
+            source = incoming.loc[row.symbol]
+            for column in ("open", "high", "low", "close", "preclose", "amount"):
+                if not math.isclose(
+                    float(getattr(row, column)),
+                    float(source[column]),
+                    rel_tol=self.config.factor_epsilon,
+                    abs_tol=self.config.factor_epsilon,
+                ):
+                    raise FatalDataError(
+                        f"{row.symbol} {trade_date} 已回补日线的 {column} 与全市场日线不一致"
+                    )
+            for column in ("volume", "trade_status", "board"):
+                if getattr(row, column) != source[column]:
+                    raise FatalDataError(
+                        f"{row.symbol} {trade_date} 已回补日线的 {column} 与全市场日线不一致"
+                    )
+        return set(existing["symbol"])
+
     def apply_market_day(
-        self, stock_list: pd.DataFrame, daily: pd.DataFrame, trade_date: date
+        self,
+        stock_list: pd.DataFrame | None,
+        daily: pd.DataFrame,
+        trade_date: date,
+        *,
+        new_symbol_histories: list[tuple[pd.DataFrame, pd.DataFrame]] | None = None,
     ) -> None:
         if not daily["date"].eq(trade_date).all():
             raise FatalDataError("apply_market_day 收到其他日期行情")
@@ -514,36 +614,27 @@ class DuckDBManager:
                     raise FatalDataError(
                         f"拒绝乱序或重复推进：last_update={last_row[0]} target={trade_date}"
                     )
-                existing_count = connection.execute(
-                    """
-                    SELECT (SELECT count(*) FROM main_board_daily WHERE date=?) +
-                           (SELECT count(*) FROM gem_board_daily WHERE date=?)
-                    """,
-                    [trade_date, trade_date],
-                ).fetchone()[0]
-                if existing_count:
-                    raise FatalDataError(f"{trade_date} 正式表已有 {existing_count} 行但 meta 尚未推进")
-
+                if new_symbol_histories and stock_list is None:
+                    raise FatalDataError("新增股票历史只能随最新证券列表在目标日提交")
+                for history, stock in new_symbol_histories or []:
+                    self._replace_new_symbol_history(
+                        connection, history, stock, trade_date
+                    )
+                existing_symbols = self._existing_daily_symbols(
+                    connection, daily, trade_date
+                )
+                pending = daily.loc[~daily["symbol"].isin(existing_symbols)].copy()
                 previous = self._previous_prices(connection, trade_date)
-                work = daily.merge(previous, on="symbol", how="left", validate="one_to_one")
-                self._upsert_stock_list(connection, stock_list, trade_date)
-                first_seen = connection.execute(
-                    """
-                    SELECT symbol, first_seen_trade_date FROM main_board_stock_list
-                    UNION ALL
-                    SELECT symbol, first_seen_trade_date FROM gem_board_stock_list
-                    """
-                ).fetchdf()
-                work = work.merge(first_seen, on="symbol", how="left", validate="one_to_one")
+                work = pending.merge(previous, on="symbol", how="left", validate="one_to_one")
+                if stock_list is not None:
+                    self._upsert_stock_list(connection, stock_list, trade_date)
 
                 events: list[dict[str, Any]] = []
                 for row in work.itertuples(index=False):
                     previous_close = getattr(row, "previous_close")
                     if pd.isna(previous_close):
-                        if getattr(row, "first_seen_trade_date") != trade_date:
-                            raise FatalDataError(
-                                f"{row.symbol} 在 {trade_date} 没有上一有效收盘价且不是新发现股票"
-                            )
+                        # A symbol first appearing inside a long catch-up window has no
+                        # local prior close. Its first downloaded row starts at factor 1.
                         continue
                     ratio = float(row.preclose) / float(previous_close)
                     if math.isclose(
@@ -610,8 +701,8 @@ class DuckDBManager:
                     "qfq_factor",
                 ]
                 for board, table in DAILY_TABLES.items():
-                    subset = daily.loc[
-                        daily["board"].eq(board),
+                    subset = pending.loc[
+                        pending["board"].eq(board),
                         [
                             "symbol",
                             "date",
@@ -634,16 +725,11 @@ class DuckDBManager:
                             f"SELECT {', '.join(insert_columns)} FROM {stage}"
                         )
 
-                inserted = connection.execute(
-                    """
-                    SELECT (SELECT count(*) FROM main_board_daily WHERE date=?) +
-                           (SELECT count(*) FROM gem_board_daily WHERE date=?)
-                    """,
-                    [trade_date, trade_date],
-                ).fetchone()[0]
-                if inserted != len(daily):
+                stored_symbols = self._existing_daily_symbols(connection, daily, trade_date)
+                if stored_symbols != set(daily["symbol"]):
                     raise FatalDataError(
-                        f"{trade_date} 正式表写入 {inserted} 行，预期 {len(daily)} 行"
+                        f"{trade_date} 正式表覆盖不完整，"
+                        f"缺少={sorted(set(daily['symbol'])-stored_symbols)[:20]}"
                     )
 
                 # Verify adjusted close continuity after all factor updates.
@@ -670,7 +756,10 @@ class DuckDBManager:
                         raise FatalDataError(f"{symbol} {trade_date} 前复权连续性校验失败")
 
                 self._set_meta(connection, "last_update_trade_date", trade_date.isoformat())
-                self._set_meta(connection, "stock_list_last_update_date", trade_date.isoformat())
+                if stock_list is not None:
+                    self._set_meta(
+                        connection, "stock_list_last_update_date", trade_date.isoformat()
+                    )
                 connection.execute("COMMIT")
             except Exception as exc:
                 with contextlib.suppress(Exception):

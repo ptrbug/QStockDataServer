@@ -196,12 +196,38 @@ class StockDataService:
                 f"缺失交易日计算异常：last_update={last_update} target={target} dates={missing_dates}"
             )
         LOGGER.info("需要补齐 %d 个交易日：%s .. %s", len(missing_dates), missing_dates[0], target)
+        latest_stock_list = self.fetcher.fetch_stock_list(target)
+        known_symbols = self.database.get_stock_symbols()
+        new_stocks = latest_stock_list.loc[
+            ~latest_stock_list["symbol"].isin(known_symbols)
+        ].sort_values("symbol", kind="stable")
+        if not new_stocks.empty:
+            LOGGER.info("发现 %d 只新增股票，开始逐股历史回补", len(new_stocks))
+        new_symbol_histories: list[tuple[Any, Any]] = []
+        for row in new_stocks.itertuples(index=False):
+            with log_context(stage="new_stock_backfill", symbol=row.symbol):
+                history = self.fetcher.fetch_stock_history(
+                    row.symbol, self.config.start_date, target
+                )
+                stock = latest_stock_list.loc[
+                    latest_stock_list["symbol"].eq(row.symbol)
+                ].copy()
+                new_symbol_histories.append((history, stock))
+                LOGGER.info("新增股票历史下载并校验完成，行数=%d", len(history))
         for trade_date in missing_dates:
             with log_context(stage="daily_update", trade_date=str(trade_date)):
-                stock_list = self.fetcher.fetch_stock_list(trade_date)
                 daily = self.fetcher.fetch_market_daily(trade_date)
-                validate_daily_pair(stock_list, daily, trade_date)
-                self.database.apply_market_day(stock_list, daily, trade_date)
+                stock_list = latest_stock_list if trade_date == target else None
+                if stock_list is not None:
+                    validate_daily_pair(stock_list, daily, trade_date)
+                self.database.apply_market_day(
+                    stock_list,
+                    daily,
+                    trade_date,
+                    new_symbol_histories=(
+                        new_symbol_histories if trade_date == target else None
+                    ),
+                )
                 LOGGER.info("交易日更新完成，行数=%d", len(daily))
         return True
 

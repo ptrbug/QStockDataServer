@@ -177,3 +177,87 @@ def test_unknown_existing_schema_is_never_overwritten(app_config) -> None:
 
     with duckdb.connect(str(app_config.database_path), read_only=True) as connection:
         assert connection.execute("SELECT count(*) FROM unrelated").fetchone()[0] == 0
+
+
+def test_new_symbol_history_is_committed_atomically_on_latest_day(app_config) -> None:
+    manager = DuckDBManager(app_config)
+    manager.initialize_schema()
+    initial_date = date(2024, 1, 2)
+    initial_stocks = stock_list(initial_date).iloc[[0]].copy()
+    manager.prepare_initial_import(initial_stocks, initial_date)
+    manager.import_symbol_history(
+        make_daily(
+            "sh.600000",
+            "main",
+            [(initial_date, 10.0, 10.0, 10.0, 10.0, 10.0, 100, 1000.0, 1)],
+        ),
+        "main",
+        initial_date,
+    )
+    manager.complete_initial_import({"sh.600000"}, initial_date)
+
+    day3 = date(2024, 1, 3)
+    daily3 = pd.concat(
+        [
+            make_daily("sh.600000", "main", [(day3, 10, 10, 10, 10, 10, 100, 1000, 1)]),
+            make_daily("sz.300001", "gem", [(day3, 20, 20, 20, 20, 20, 100, 2000, 1)]),
+        ],
+        ignore_index=True,
+    )
+    manager.apply_market_day(None, daily3, day3)
+
+    day4 = date(2024, 1, 4)
+    latest_stocks = stock_list(day4)
+    daily4 = pd.concat(
+        [
+            make_daily("sh.600000", "main", [(day4, 10, 10, 10, 10, 10, 100, 1000, 1)]),
+            make_daily("sz.300001", "gem", [(day4, 20, 20, 20, 20, 20, 100, 2000, 1)]),
+        ],
+        ignore_index=True,
+    )
+    gem_history = pd.concat(
+        [
+            daily3.loc[daily3["symbol"].eq("sz.300001")],
+            daily4.loc[daily4["symbol"].eq("sz.300001")],
+        ],
+        ignore_index=True,
+    )
+    gem_stock = latest_stocks.loc[latest_stocks["symbol"].eq("sz.300001")].copy()
+    validate_daily_pair(latest_stocks, daily4, day4)
+
+    conflicting_history = gem_history.copy()
+    conflicting_history.loc[
+        conflicting_history["date"].eq(day4), "close"
+    ] = 21.0
+    with pytest.raises(FatalDataError, match="已回补日线的 close.*不一致"):
+        manager.apply_market_day(
+            latest_stocks,
+            daily4,
+            day4,
+            new_symbol_histories=[(conflicting_history, gem_stock)],
+        )
+    assert manager.get_last_update_date() == day3
+    with manager.connect(read_only=True) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM gem_board_daily WHERE symbol='sz.300001'"
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT count(*) FROM gem_board_stock_list WHERE symbol='sz.300001'"
+        ).fetchone()[0] == 0
+
+    manager.apply_market_day(
+        latest_stocks,
+        daily4,
+        day4,
+        new_symbol_histories=[(gem_history, gem_stock)],
+    )
+
+    assert manager.get_last_update_date() == day4
+    assert manager.get_meta("stock_list_last_update_date") == day4.isoformat()
+    with manager.connect(read_only=True) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM gem_board_daily WHERE symbol='sz.300001'"
+        ).fetchone()[0] == 2
+        assert connection.execute(
+            "SELECT count(*) FROM gem_board_stock_list WHERE symbol='sz.300001'"
+        ).fetchone()[0] == 1

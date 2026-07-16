@@ -248,16 +248,13 @@ CREATE TABLE IF NOT EXISTS gem_board_stock_list (
 );
 ```
 
-证券列表使用 `query_all_stock(day=trade_date)` 获取。该接口返回指定交易日的 `code`、`tradeStatus` 和 `code_name`，并且与日 K 线同时更新。返回结果同时包含 A 股和指数，不能不经筛选直接写入股票列表。
+证券列表使用 `query_all_stock(day=target_trade_date)` 获取。一次增量任务只对本轮最新目标交易日调用一次；该接口返回的 A 股和指数必须先筛选为主板、创业板，不能直接写入股票列表。
 
-对每个待更新交易日，必须先后获取该日证券列表和该日全市场 K 线，并按代码关联：
-
-1. 调用 `query_all_stock(day=trade_date)` 获取该日证券集合；
-2. 在 `data_fetcher.py` 中排除指数和非目标板块，只保留主板、创业板 A 股；
-3. 调用 `query_daily_history_k_AStock(date=trade_date)` 获取该日日 K；
-4. 使用 `code` 关联两份结果，校验 `tradeStatus` 与 K 线 `tradestatus` 一致；
-5. 将 `code_name`、最新 `trade_status` 和 `last_seen_trade_date` 更新到股票列表；
-6. 证券列表与日线、复权因子、调整事件在同一轮事务中提交。
+1. 调用一次 `query_all_stock(day=target_trade_date)` 获取最新证券集合；
+2. 与本地证券列表比较，每只新增股票调用一次 `query_history_k_data_plus()` 回补历史；
+3. 每个缺失交易日只调用 `query_daily_history_k_AStock(date)` 获取当日日 K；
+4. 仅在最新目标日使用 `code` 关联证券列表与日 K，校验代码集合和交易状态一致；历史补数日不能拿最新列表强行比对；
+5. 新股历史、最新证券列表、目标日日 K、复权因子和调整事件在目标日事务中原子提交。
 
 字段含义必须区分：
 
@@ -342,11 +339,12 @@ schema_version
 
 ### 8. 增量更新与批量获取
 
-日常增量更新按交易日配对使用 Baostock 的 `query_all_stock(day)` 和 `query_daily_history_k_AStock(date)`：前者提供该日证券集合、名称和交易状态，后者一次获取指定交易日全部 A 股的日 K 线。
+日常增量更新中，`query_all_stock(day)` 只负责获取最新目标交易日的证券列表，`query_daily_history_k_AStock(date)` 负责获取每个缺失交易日的全部 A 股日 K。
 
 - 一次更新任务覆盖一个或多个缺失交易日；
-- 严格按缺失交易日升序，每个交易日各调用一次 `query_all_stock(day)` 和 `query_daily_history_k_AStock(date)`；
-- 即使本地缺少约一年的数据，日 K 接口调用次数也只是该年度的交易日数量，通常约 240 至 250 次，而不是股票数量乘以交易日数量；证券列表接口同样每个交易日一次；
+- 对最新目标交易日调用一次 `query_all_stock(day)`，严格按缺失交易日升序，每个交易日调用一次 `query_daily_history_k_AStock(date)`；
+- 即使本地缺少约一年的数据，证券列表接口仍只调用一次，日 K 接口通常调用约 240 至 250 次，而不是股票数量乘以交易日数量；
+- 将最新证券列表与本地列表比较；发现新增股票时，每只新增股票调用一次 `query_history_k_data_plus()`，从 2018-01-01 或上市后首个可用交易日回补历史；
 - 接口返回全体 A 股后，由 `data_fetcher.py` 使用统一板块规则筛选主板和创业板，排除科创板、北交所及其他证券；
 - 返回结果必须包含 `preclose`、`tradestatus` 和 `adjustflag`，并校验持久化价格确实为不复权口径；
 - 每个交易日的结果先整体写入 DataFrame、Arrow Table 或 DuckDB staging 表，不允许逐行提交；
@@ -363,21 +361,21 @@ fetch_market_daily_dates(
 ) -> pandas.DataFrame
 ```
 
-其中 `fetch_market_daily()` 直接封装 `query_daily_history_k_AStock(date)`；`fetch_market_daily_dates()` 按日期升序调用前者并汇总结果。每个日期还必须配套调用 `fetch_stock_list(trade_date)`。对 `server.py` 暴露的是按交易日的全市场接口，不再要求服务端传入股票代码批次。
+其中 `fetch_market_daily()` 直接封装 `query_daily_history_k_AStock(date)`；`fetch_market_daily_dates()` 按日期升序调用前者并汇总结果。一次更新任务只调用 `fetch_stock_list(target_trade_date)`，不为每个历史补数日重复获取证券列表。
 
 ### 9. 防重复、防遗漏和事务要求
 
 增量更新必须遵循以下流程：
 
 1. 根据 `last_update_trade_date` 和 Baostock 最新交易日，生成完整的缺失交易日列表；
-2. 严格按日期顺序抓取，不允许直接跳到最新日期；每个日期先获取 `query_all_stock(day)`，再获取 `query_daily_history_k_AStock(date)`；
+2. 先获取一次最新目标日证券列表并识别、下载新增股票历史，再严格按日期顺序调用 `query_daily_history_k_AStock(date)`，不允许直接跳到最新日期；
 3. 将本轮证券列表和不复权行情结果分别写入临时 staging 表；
 4. 对 staging 数据进行去重，唯一键为 `symbol + date`；
 5. 校验以下内容：
    - 缺失交易日列表中的每个交易日都已经执行抓取；
    - 每次响应中的 `date` 必须全部等于本次请求的交易日；
-   - K 线中的主板和创业板代码必须与同日 `query_all_stock()` 筛选结果进行覆盖比对；
-   - 两个接口中的交易状态必须一致；停牌证券应有 `trade_status=0` 的合法日线记录；
+   - 最新目标日 K 线中的主板和创业板代码必须与最新 `query_all_stock()` 筛选结果覆盖一致；历史补数日不使用最新列表做集合判断；
+   - 最新目标日两个接口中的交易状态必须一致；停牌证券应有 `trade_status=0` 的合法日线记录；
    - 同一个交易日的同一股票不能出现多条记录；
    - `adjustflag` 必须符合不复权存储要求；
    - 不存在无法解释的日期断层；
@@ -416,7 +414,7 @@ WHERE NOT EXISTS (
 - Baostock 返回成功状态，但缺少必需字段、字段类型无法转换或返回空结果且无法解释；
 - 返回日期不是请求日期，出现未来日期、区间外日期或日期顺序异常；
 - 证券代码格式错误、板块分类无法确定、同一 `symbol + date` 重复；
-- `query_all_stock()` 与 `query_daily_history_k_AStock()` 的目标股票集合或交易状态不一致；
+- 最新目标日的 `query_all_stock()` 与 `query_daily_history_k_AStock()` 目标股票集合或交易状态不一致；
 - `adjustflag` 不是 `3`，或同一批次混入不同复权口径；
 - 正常交易记录的 OHLC、`preclose` 非正数，`high/low` 关系非法，成交量或成交额为负；
 - 停牌记录不符合 `trade_status=0` 的约束，或被错误地当作缺失记录；
@@ -827,9 +825,9 @@ fetch_market_daily_dates(trade_dates: list[str]) -> pandas.DataFrame
 | 模块       | 技术选型                                        |
 | ---------- | ----------------------------------------------- |
 | 数据源     | Baostock                                        |
-| 证券列表接口 | `query_all_stock(day)`，与每个待更新交易日的日 K 配对获取 |
+| 证券列表接口 | `query_all_stock(day)`，每次更新只获取最新目标交易日一次 |
 | 日常增量接口 | `query_daily_history_k_AStock(date)`，每个缺失交易日一次 |
-| 单股历史接口 | `query_history_k_data_plus(symbol, ...)`，仅用于首次导入和修复 |
+| 单股历史接口 | `query_history_k_data_plus(symbol, ...)`，用于首次导入、新股回补和修复 |
 | 持久化存储 | DuckDB 文件 `data/stock_daily.duckdb`           |
 | 日线表     | `main_board_daily`、`gem_board_daily`           |
 | 价格存储   | 不复权 OHLC、`preclose` 和可重建的 `qfq_factor` |
@@ -863,7 +861,7 @@ fetch_market_daily_dates(trade_dates: list[str]) -> pandas.DataFrame
 3. `data_fetcher.py`
    - 完整对接 Baostock；
    - 提供交易日历、股票列表、单股票历史和按交易日获取全体 A 股的增量接口；
-   - 证券列表使用 `query_all_stock(day)`，过滤指数后与同日日 K 做代码及交易状态校验；
+   - 证券列表使用 `query_all_stock(day)`，每次更新只获取最新目标日一次；过滤指数后与目标日日 K 做代码及交易状态校验；发现新增股票时用 `query_history_k_data_plus()` 回补历史；
    - 日常更新必须使用 `query_daily_history_k_AStock(date)`，并在返回后筛选主板和创业板；
    - 日线固定获取不复权价格、`preclose` 和 `tradestatus`。
 
