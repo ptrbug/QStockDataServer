@@ -109,7 +109,8 @@ CREATE TABLE IF NOT EXISTS gem_board_daily (
 - `qfq_factor` 是从不复权数据推导出的前复权因子缓存，不是新的行情真源；
 - `trade_status` 用于区分正常交易、停牌和接口遗漏；
 - Baostock 返回的字符串字段在写入前统一转换为正确的数据类型；
-- 空字符串、无效数值统一转换为 `NULL`，不能因为单条异常导致整个批次写入错误；
+- 只有文档允许为空的可选字段才能将空字符串转换为 `NULL`；`symbol`、`date`、OHLC、`preclose`、`adjustflag`、`trade_status` 等必需字段为空、类型错误或数值非法时，必须将整轮任务判定为致命数据错误；
+- 不允许为了让批次继续写入而静默丢弃、填零、修正或跳过异常行情记录；
 - 如后续需要保存涨跌幅、是否 ST 等 Baostock 字段，可以在此结构上扩展，但不能破坏唯一键。
 
 #### 3.1 不复权存储与前复权因子
@@ -144,7 +145,7 @@ event_factor = preclose / previous_close
 - `event_factor` 在配置误差范围内等于 `1`：没有新的价格基准调整，历史因子不变；
 - `event_factor` 不等于 `1`：识别为新的除权除息或价格基准调整事件，事件日之前的因子都需要乘以该比例；
 - 一轮补数包含多个交易日时，必须严格按日期升序计算，使多个调整事件可以连续累积；
-- 除已核实为新股上市首条行情的情况外，`preclose`、`previous_close` 为空、为零或无法衔接时，不允许猜测因子；该股票本轮更新应标记失败并等待重试或人工检查；
+- 除已核实为新股上市首条行情的情况外，`preclose`、`previous_close` 为空、为零或无法衔接时，不允许猜测因子；该情况属于致命数据错误，必须回滚并终止程序；
 - 新股上市首条行情没有本地 `previous_close`，该行作为该股票的初始锚点，不生成调整事件；待完整历史区间抓取后再从最后一个有效交易日向前统一计算因子。
 
 为便于审计和保证重复执行的幂等性，保存调整事件：
@@ -165,7 +166,7 @@ CREATE TABLE IF NOT EXISTS adjustment_events (
 
 - 事件不存在：插入事件并更新该股票历史因子；
 - 事件已存在且比例一致：跳过重复应用；
-- 事件已存在但比例变化：视为数据源修订，重新根据该股票全部不复权 `close/preclose` 确定性重建因子，不能在旧因子上再次相乘。
+- 事件已存在但比例变化：视为可能的数据源修订或历史数据冲突，禁止自动覆盖或自动重建，必须触发致命数据错误并等待人工确认；只有显式修复命令才允许根据该股票全部不复权 `close/preclose` 确定性重建因子。
 
 无论首次导入还是增量更新，因子写入、`adjustment_events` 写入、日线合并和 `meta.last_update_trade_date` 推进必须位于同一个数据库事务中。`qfq_factor` 只是一份可重建缓存；如发现异常，可以随时从不复权 `close/preclose` 全量重建指定股票的因子。
 
@@ -349,7 +350,7 @@ schema_version
 - 接口返回全体 A 股后，由 `data_fetcher.py` 使用统一板块规则筛选主板和创业板，排除科创板、北交所及其他证券；
 - 返回结果必须包含 `preclose`、`tradestatus` 和 `adjustflag`，并校验持久化价格确实为不复权口径；
 - 每个交易日的结果先整体写入 DataFrame、Arrow Table 或 DuckDB staging 表，不允许逐行提交；
-- 单日获取失败时只重试该交易日；已经成功写入 staging 的其他交易日不需要重新请求；
+- 单日网络、登录或 Baostock 临时服务失败时只重试该交易日；已经成功写入 staging 且通过单日校验的其他交易日不需要重新请求；如果返回了结构或内容异常的行情，则不重试、不跳过，直接进入失败关闭流程；
 - `query_history_k_data_plus(symbol, ...)` 只用于首次历史导入、新上市股票回补、单股修复或日级接口无法完成的异常修复，不作为日常全市场增量更新的主路径。
 
 建议接口：
@@ -388,7 +389,7 @@ fetch_market_daily_dates(
 10. 插入时使用唯一键约束、`NOT EXISTS`、`ANTI JOIN` 或等价方式过滤已有记录；
 11. 再次校验正式表已覆盖本轮交易日期，并抽查前复权连续性；
 12. 全部成功后，才更新 `meta.last_update_trade_date` 并提交事务；
-13. 任一步骤失败则回滚整个批次，日线、因子、调整事件和 `last_update_trade_date` 均保持原状态，下次从同一交易日重新更新。
+13. 任一步骤发现数据完整性异常，立即回滚整个批次，日线、因子、调整事件和 `last_update_trade_date` 均保持原状态，然后按下述“失败关闭”规则终止整个服务进程。
 
 推荐插入方式示例：
 
@@ -406,6 +407,54 @@ WHERE NOT EXISTS (
 
 唯一键负责最终防重，staging 校验和事务负责防止中间遗漏及半批次提交。
 
+#### 9.1 失败关闭、致命错误标记和日志
+
+本项目以行情可靠性优先，采用强制的 **fail-closed（失败关闭）** 策略。只要下载结果无法通过完整性校验，就不能继续提供查询服务，也不能等待下一次定时任务静默重试。
+
+以下情况属于致命数据错误，发现任意一项即停止本轮并终止程序：
+
+- Baostock 返回成功状态，但缺少必需字段、字段类型无法转换或返回空结果且无法解释；
+- 返回日期不是请求日期，出现未来日期、区间外日期或日期顺序异常；
+- 证券代码格式错误、板块分类无法确定、同一 `symbol + date` 重复；
+- `query_all_stock()` 与 `query_daily_history_k_AStock()` 的目标股票集合或交易状态不一致；
+- `adjustflag` 不是 `3`，或同一批次混入不同复权口径；
+- 正常交易记录的 OHLC、`preclose` 非正数，`high/low` 关系非法，成交量或成交额为负；
+- 停牌记录不符合 `trade_status=0` 的约束，或被错误地当作缺失记录；
+- `preclose` 无法与上一有效收盘价衔接，复权事件重复、比例冲突或重建后收益连续性校验失败；
+- staging 与正式表的行数、唯一键、日期覆盖或校验摘要不一致；
+- 数据库提交后构建新内存快照失败，导致磁盘版本与对外快照版本不一致。
+
+致命数据错误的处理顺序固定为：
+
+1. 停止调度器，不再接受新的 Flight 查询；
+2. 如果磁盘事务尚未提交，则回滚并保持 `last_update_trade_date` 不变；如果磁盘已经提交但新内存快照构建失败，则不得伪造回滚，保留已提交磁盘版本并在致命错误标记中同时记录磁盘版本与旧快照版本；
+3. 将错误同时打印到标准错误输出和滚动错误日志，并强制刷新日志；
+4. 原子写入 `runtime/FATAL_ERROR.json`，至少包含发生时间、阶段、请求日期、股票代码、校验规则、期望值、实际值、Baostock 错误码、`run_id`、异常堆栈和日志文件位置；
+5. 数据完整性错误以退出码 `4`、磁盘或快照错误以退出码 `5` 终止整个进程；之前已验证并提交的数据保留，但服务不再继续运行。
+
+程序启动时必须先检查 `runtime/FATAL_ERROR.json`。标记存在时，打印上次致命错误摘要并拒绝启动、拒绝自动下载，避免 Windows 或 Linux 的开机自启动策略反复写入或反复请求。人工处理流程为：
+
+```text
+python server.py doctor --config config.yaml
+python server.py clear-fatal --config config.yaml --confirm
+python server.py serve --config config.yaml
+```
+
+`doctor` 必须以只读方式检查配置、DuckDB schema、唯一键、日期覆盖、复权因子和最后一次已提交快照；只有检查通过后，`clear-fatal --confirm` 才允许删除致命错误标记。删除标记不修改行情数据和 `last_update_trade_date`。
+
+网络超时、连接中断、登录失败以及 Baostock 明确返回的临时服务错误不属于“错误行情已返回”，可以按配置重试；达到最大重试次数后仍失败，则记录 `CRITICAL` 日志并以退出码 `3` 终止进程。配置/schema 错误使用退出码 `2`，数据完整性错误使用退出码 `4`，磁盘或快照错误使用退出码 `5`，正常主动停止使用退出码 `0`。
+
+日志要求：
+
+- 控制台和文件同时输出，文件使用 UTF-8；
+- 使用按大小滚动的主日志和独立错误日志，保留多个历史文件；
+- 每轮导入或更新生成唯一 `run_id`，所有抓取、校验、事务和快照日志都携带该字段；
+- 错误日志必须包含请求接口、请求日期/区间、股票代码、响应字段、响应行数、Baostock `error_code/error_msg`、失败规则和异常堆栈；
+- 可记录异常响应的有限样本和摘要哈希用于排查，但不能把未验证的响应写入正式行情表；
+- 进程退出前必须显式刷新并关闭日志处理器。
+
+单一数据源无法从数学上证明 Baostock 上游数据本身“绝对真实”；本方案保证的是：任何未通过结构、范围、覆盖、状态、价格关系、复权连续性和事务一致性校验的数据都不会进入正式表，也不会继续对外服务。如果需要验证 Baostock 上游数值本身，还必须引入独立第二数据源交叉核对，这不在当前“数据源固定为 Baostock”的范围内。
+
 ### 10. 定时更新任务
 
 更新时间通过配置文件指定：
@@ -421,6 +470,12 @@ initial_import_batch_size: 100
 factor_epsilon: 1.0e-10
 flight_host: "127.0.0.1"
 flight_port: 8815
+runtime_dir: "runtime"
+log_path: "logs/qstockdataserver.log"
+error_log_path: "logs/qstockdataserver.error.log"
+log_level: "INFO"
+log_max_bytes: 10485760
+log_backup_count: 10
 ```
 
 每天到配置时间后执行：
@@ -432,9 +487,9 @@ flight_port: 8815
 5. 有缺失日期：执行批量抓取、staging 校验和事务写入；
 6. 网络异常或接口错误：按配置间隔重试；
 7. 当天为非交易日且没有缺失历史交易日：正常跳过，不进入失败重试；
-8. 达到最大重试次数仍失败：保留原 `last_update_trade_date`，记录错误并等待下次定时任务或人工触发。
+8. 达到最大重试次数仍失败：保留原 `last_update_trade_date`，写入 `CRITICAL` 日志并以退出码 `3` 终止程序，不继续提供查询服务。
 
-定时任务使用 **APScheduler** 的 cron 方式，嵌入常驻进程，不依赖 Windows 任务计划程序或外部脚本。
+每日行情更新使用 **APScheduler** 的 cron 方式并嵌入常驻进程，不依赖操作系统调度器；Windows 任务计划程序或 Linux systemd 只负责开机启动和进程管理。
 
 ### 11. 更新成功后重新加载数据
 
@@ -455,12 +510,12 @@ flight_port: 8815
 5. 将查询服务当前连接原子替换为新连接；
 6. 释放写锁并关闭旧连接。
 
-在新快照加载完成前，查询请求继续读取旧快照，避免客户端看到空表、半更新数据或服务长时间不可用。
+在新快照加载期间，已开始的查询可以完成；切换成功后新查询使用新快照。如果新快照加载或校验失败，立即停止接受新查询、写入致命错误标记并以退出码 `5` 终止程序，不能长期继续对外提供旧快照。
 
 也可以使用等价的读写锁方案，但必须满足：
 
 - 查询和重载不能同时修改同一连接；
-- 更新失败时继续使用旧快照；
+- 重载期间不得关闭仍被活动查询引用的旧快照；
 - 只有磁盘提交和新快照加载都成功，才对外切换最新数据。
 
 ### 12. 内存表加载
@@ -526,7 +581,7 @@ FROM gem_board_daily;
 - 优先使用 **Arrow Flight**；
 - 也可使用 Arrow IPC + TCP socket；
 - 不使用 pickle 或 `multiprocessing.managers`；
-- 必须支持 Windows，不使用 Unix Domain Socket；
+- 必须同时支持 Windows 和 Linux，统一使用 TCP，不依赖 Unix Domain Socket；
 - 客户端允许频繁连接和断开，不要求长连接。
 
 客户端调用示例：
@@ -563,6 +618,112 @@ sz.000001
 sz.300750
 ```
 
+## Windows 和 Linux 开机自启动
+
+服务必须同时支持 Windows 和 Linux。Python 代码、配置格式、数据库格式和 Flight TCP 协议保持一致，平台差异只放在启动脚本和服务管理配置中。所有示例都必须使用绝对路径，避免开机启动时当前工作目录不同导致数据库或日志写到错误位置。
+
+### Windows：任务计划程序
+
+普通 Python 程序不能直接通过 `sc.exe create` 伪装成 Windows Service；本项目使用 Windows 任务计划程序在系统启动时拉起常驻进程。任务计划程序只负责开机启动，日常行情更新仍由进程内 APScheduler 执行。
+
+以管理员身份打开 PowerShell，将路径替换为实际安装目录后执行：
+
+```powershell
+$ProjectRoot = "C:\QStockDataServer"
+$Python = "$ProjectRoot\.venv\Scripts\python.exe"
+$Server = "$ProjectRoot\server.py"
+$Config = "$ProjectRoot\config.yaml"
+
+$Action = New-ScheduledTaskAction `
+    -Execute $Python `
+    -Argument "`"$Server`" serve --config `"$Config`"" `
+    -WorkingDirectory $ProjectRoot
+
+$Trigger = New-ScheduledTaskTrigger -AtStartup
+
+$Settings = New-ScheduledTaskSettingsSet `
+    -StartWhenAvailable `
+    -RestartCount 3 `
+    -RestartInterval (New-TimeSpan -Minutes 1) `
+    -ExecutionTimeLimit ([TimeSpan]::Zero) `
+    -MultipleInstances IgnoreNew
+
+Register-ScheduledTask `
+    -TaskName "QStockDataServer" `
+    -Action $Action `
+    -Trigger $Trigger `
+    -Settings $Settings `
+    -User "SYSTEM" `
+    -RunLevel Highest `
+    -Force
+
+Start-ScheduledTask -TaskName "QStockDataServer"
+```
+
+常用管理命令：
+
+```powershell
+Get-ScheduledTask -TaskName "QStockDataServer"
+Get-ScheduledTaskInfo -TaskName "QStockDataServer"
+Stop-ScheduledTask -TaskName "QStockDataServer"
+Start-ScheduledTask -TaskName "QStockDataServer"
+Unregister-ScheduledTask -TaskName "QStockDataServer" -Confirm:$false
+Get-Content "C:\QStockDataServer\logs\qstockdataserver.error.log" -Wait
+```
+
+任务最多自动重启三次。若存在 `runtime/FATAL_ERROR.json`，进程每次都会拒绝启动；必须先人工运行 `doctor` 并清除致命错误标记。
+
+### Linux：systemd
+
+交付 `deploy/qstockdataserver.service` 模板，示例内容：
+
+```ini
+[Unit]
+Description=QStockDataServer
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=qstock
+Group=qstock
+WorkingDirectory=/opt/QStockDataServer
+ExecStart=/opt/QStockDataServer/.venv/bin/python /opt/QStockDataServer/server.py serve --config /opt/QStockDataServer/config.yaml
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=10
+RestartPreventExitStatus=2 4 5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+```
+
+安装和启用命令：
+
+```bash
+id -u qstock >/dev/null 2>&1 || sudo useradd --system --home /opt/QStockDataServer --shell /usr/sbin/nologin qstock
+sudo chown -R qstock:qstock /opt/QStockDataServer
+sudo cp deploy/qstockdataserver.service /etc/systemd/system/qstockdataserver.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now qstockdataserver.service
+sudo systemctl status qstockdataserver.service
+sudo journalctl -u qstockdataserver.service -f
+```
+
+常用管理命令：
+
+```bash
+sudo systemctl stop qstockdataserver.service
+sudo systemctl start qstockdataserver.service
+sudo systemctl restart qstockdataserver.service
+sudo systemctl disable --now qstockdataserver.service
+```
+
+systemd 对临时退出码 `3` 可以有限重启，但 `RestartPreventExitStatus=2 4 5` 禁止对配置错误、数据完整性错误和磁盘/快照错误自动重启。即使服务管理配置被误改，`runtime/FATAL_ERROR.json` 仍提供第二层启动保护。
+
 ## 模块划分
 
 ### `server.py`
@@ -575,7 +736,9 @@ sz.300750
 - 启动 Arrow Flight 查询服务；
 - 启动 APScheduler 定时任务；
 - 控制更新锁、查询读锁和内存快照原子切换；
-- 更新失败时继续保留旧内存快照。
+- 启动前检查致命错误标记；
+- 提供 `serve`、`doctor`、`clear-fatal` 命令；
+- 发生数据完整性或快照错误时停止服务、写入标记并按约定退出码终止进程。
 
 ### `client.py`
 
@@ -614,12 +777,12 @@ fetch_market_daily_dates(trade_dates: list[str]) -> pandas.DataFrame
 - `fetch_stock_list()` 封装 `query_all_stock(day=trade_date)`，过滤指数和非目标板块，标准化 `code`、`code_name`、`tradeStatus`；
 - `fetch_stock_history()` 封装 `query_history_k_data_plus()`，用于首次导入、新股历史回补和单股票修复；
 - `fetch_market_daily()` 封装 `query_daily_history_k_AStock(date)`，用于获取单个交易日全部 A 股日 K 线并筛选目标板块；
-- `fetch_market_daily_dates()` 按日期升序批量补齐一个或多个缺失交易日，某日失败时保留已成功日期的 staging 结果；
+- `fetch_market_daily_dates()` 按日期升序批量补齐一个或多个缺失交易日；仅临时网络/API 故障允许按日重试，数据校验失败必须立即抛出致命错误；
 - 所有日线接口必须获取不复权数据，并且请求或返回 `preclose`、`tradestatus` 和 `adjustflag`；
 - 全市场日级接口返回后必须检查 `adjustflag`，不能把未知或不同复权口径的数据写入不复权正式表；
 - `data_fetcher.py` 不直接计算或持久化前复权因子，因子计算由掌握本地上一有效收盘价和事务状态的 `db_manager.py` 负责；
 - 所有接口返回统一字段名和数据类型；
-- 登录会话、错误码、错误信息和重试逻辑统一封装，不能散落在 `server.py` 中。
+- 登录会话、错误码、错误信息和重试逻辑统一封装，不能散落在 `server.py` 中；临时传输错误和致命数据错误必须使用不同异常类型，禁止对致命数据错误自动重试。
 
 ### `db_manager.py`
 
@@ -632,7 +795,18 @@ fetch_market_daily_dates(trade_dates: list[str]) -> pandas.DataFrame
 - 数据完整性校验；
 - 使用 `preclose / previous_close` 计算、校验和确定性重建 `qfq_factor`；
 - 管理 `adjustment_events`，保证调整事件不会被重复应用；
-- 构建新的内存快照。
+- 构建新的内存快照；
+- 为 `doctor` 提供只读的全库一致性检查。
+
+### `logging_config.py`
+
+统一配置控制台日志、滚动主日志和滚动错误日志，负责：
+
+- UTF-8 输出和统一日志格式；
+- 注入 `run_id`、任务阶段、交易日期和股票代码上下文；
+- `ERROR`、`CRITICAL` 进入独立错误日志；
+- 生成和原子写入 `runtime/FATAL_ERROR.json`；
+- 退出前刷新并关闭全部日志处理器。
 
 ### `config.yaml`
 
@@ -645,7 +819,8 @@ fetch_market_daily_dates(trade_dates: list[str]) -> pandas.DataFrame
 - 首次逐股历史导入的落库批次大小；
 - 复权因子比较误差 `factor_epsilon`；
 - Arrow Flight 地址和端口；
-- 日志级别和日志路径。
+- runtime 目录和致命错误标记位置；
+- 主日志、错误日志、日志级别、滚动大小和保留数量。
 
 ## 技术选型总结
 
@@ -665,8 +840,10 @@ fetch_market_daily_dates(trade_dates: list[str]) -> pandas.DataFrame
 | 查询层     | 常驻进程中的 DuckDB 内存快照                    |
 | 进程间传输 | Arrow Flight 优先，或 Arrow IPC TCP             |
 | 定时调度   | APScheduler cron                                |
+| 错误策略   | fail-closed、滚动错误日志、致命错误标记和非零退出码 |
 | 配置管理   | YAML                                            |
-| 运行平台   | Windows，使用 TCP loopback                      |
+| 运行平台   | Windows 和 Linux，使用 TCP loopback             |
+| 开机启动   | Windows Task Scheduler / Linux systemd          |
 
 ## 交付物要求
 
@@ -676,7 +853,9 @@ fetch_market_daily_dates(trade_dates: list[str]) -> pandas.DataFrame
    - 启动时根据 `meta.last_update_trade_date` 自动补数；
    - 启动 Arrow Flight 服务；
    - 运行 APScheduler 定时更新；
-   - 更新成功后重新加载并原子切换内存快照。
+   - 更新成功后重新加载并原子切换内存快照；
+   - 提供 `serve`、`doctor`、`clear-fatal` 命令和规定的进程退出码；
+   - 致命错误时停止 Flight、写日志和错误标记后退出。
 
 2. `client.py`
    - 提供 `query(sql) -> pandas.DataFrame` 接口。
@@ -693,16 +872,29 @@ fetch_market_daily_dates(trade_dates: list[str]) -> pandas.DataFrame
    - 负责 `qfq_factor` 的首次计算、增量调整、幂等校验和指定股票全量重建；
    - 负责维护 `adjustment_events`。
 
-5. `config.yaml`
+5. `logging_config.py`
+   - 配置控制台、滚动主日志、滚动错误日志和致命错误标记。
+
+6. `config.yaml`
    - 提供可直接修改的配置示例。
 
-6. `requirements.txt`
+7. `requirements.txt`
    - 至少包含 `duckdb`、支持 `query_daily_history_k_AStock()` 的 `baostock` 版本、`pandas`、`pyarrow`、`apscheduler`、`pyyaml`。
 
-7. `README.md`
+8. `deploy/windows-autostart.ps1` 和 `deploy/qstockdataserver.service`
+   - 分别提供 Windows 任务计划程序和 Linux systemd 的安装、启用、查看日志、停止和卸载命令；
+   - 所有路径使用可配置的绝对路径。
+
+9. `tests/`
+   - 覆盖错误日期、错误代码、重复行、字段缺失、错误复权口径、停牌、集合不一致、因子冲突、事务回滚、快照失败、致命标记和退出码；
+   - 使用模拟 Baostock 响应验证任何异常行情都不会进入正式表。
+
+10. `README.md`
    - 安装依赖；
    - 初始化和首次导入；
    - 启动 server；
    - 策略程序调用 client；
    - 配置字段说明；
-   - 手动触发补数和常见错误处理。
+   - 手动触发补数和常见错误处理；
+   - Windows/Linux 开机自启动与管理命令；
+   - 错误日志位置、退出码、`doctor` 和致命错误恢复流程。
