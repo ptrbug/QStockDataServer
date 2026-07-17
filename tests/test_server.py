@@ -5,7 +5,13 @@ from datetime import date
 
 import pandas as pd
 
-from server import StockDataService
+from server import StockDataService, _build_parser
+
+
+def test_cli_uses_default_config_path() -> None:
+    args = _build_parser().parse_args(["serve"])
+
+    assert args.config == "config.yaml"
 
 
 def _daily(trade_date: date) -> pd.DataFrame:

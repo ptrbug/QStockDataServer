@@ -46,22 +46,22 @@ python3 -m venv .venv
 
 默认配置位于 `config.yaml`。相对路径都按配置文件所在目录解析，因此开机启动时不会把数据库或日志写入错误目录。
 
-| 配置项                   | 默认值                            | 说明                                           |
-| ------------------------ | --------------------------------- | ---------------------------------------------- |
-| `database_path`          | `data/stock_daily.duckdb`         | 磁盘 DuckDB                                    |
-| `start_date`             | `2018-01-01`                      | 首次导入起始日                                 |
-| `update_time`            | `18:30`                           | 每日调度时间                                   |
-| `timezone`               | `Asia/Shanghai`                   | 调度时区                                       |
-| `retry_delays_seconds`   | `[3, 30, 120, 300]`               | 各次失败后的退避秒数；列表耗尽后复用最后一个值 |
-| `max_retries`            | `12`                              | 每次 API 调用最大尝试次数                      |
-| `session_max_minutes`    | `30`                              | BaoStock 会话最长连续使用时间                  |
-| `factor_epsilon`         | `1e-10`                           | 复权因子比较误差                               |
-| `flight_host`            | `127.0.0.1`                       | 只允许回环地址；服务没有远程认证               |
-| `flight_port`            | `8815`                            | Arrow Flight TCP 端口                          |
-| `query_max_rows`         | `50000000`                        | 单次查询最大返回行数                           |
-| `runtime_dir`            | `runtime`                         | 锁文件和致命标记目录                           |
-| `log_path`               | `logs/qstockdataserver.log`       | 滚动主日志                                     |
-| `error_log_path`         | `logs/qstockdataserver.error.log` | ERROR/CRITICAL 日志                            |
+| 配置项                 | 默认值                            | 说明                                           |
+| ---------------------- | --------------------------------- | ---------------------------------------------- |
+| `database_path`        | `data/stock_daily.duckdb`         | 磁盘 DuckDB                                    |
+| `start_date`           | `2018-01-01`                      | 首次导入起始日                                 |
+| `update_time`          | `18:30`                           | 每日调度时间                                   |
+| `timezone`             | `Asia/Shanghai`                   | 调度时区                                       |
+| `retry_delays_seconds` | `[3, 30, 120, 300]`               | 各次失败后的退避秒数；列表耗尽后复用最后一个值 |
+| `max_retries`          | `12`                              | 每次 API 调用最大尝试次数                      |
+| `session_max_minutes`  | `30`                              | BaoStock 会话最长连续使用时间                  |
+| `factor_epsilon`       | `1e-10`                           | 复权因子比较误差                               |
+| `flight_host`          | `127.0.0.1`                       | 只允许回环地址；服务没有远程认证               |
+| `flight_port`          | `8815`                            | Arrow Flight TCP 端口                          |
+| `query_max_rows`       | `50000000`                        | 单次查询最大返回行数                           |
+| `runtime_dir`          | `runtime`                         | 锁文件和致命标记目录                           |
+| `log_path`             | `logs/qstockdataserver.log`       | 滚动主日志                                     |
+| `error_log_path`       | `logs/qstockdataserver.error.log` | ERROR/CRITICAL 日志                            |
 
 临时网络或 BaoStock API 错误会立即废弃旧会话，依次等待 3 秒、30 秒、2 分钟，之后每次等待 5 分钟；只在下一次请求前重新登录。即使没有错误，会话使用超过 30 分钟后，也会在两次请求之间主动轮换。结构、日期或行情内容错误不会自动重试。
 
@@ -74,13 +74,13 @@ python3 -m venv .venv
 Windows：
 
 ```powershell
-.\.venv\Scripts\python.exe server.py serve --config config.yaml
+.\.venv\Scripts\python.exe server.py serve
 ```
 
 Linux：
 
 ```bash
-./.venv/bin/python server.py serve --config config.yaml
+./.venv/bin/python server.py serve
 ```
 
 启动顺序是：初始化 schema、首次导入或补齐缺失交易日、构建内存快照、启动 Flight 和每日调度。更新期间旧快照可以完成已有查询；只有磁盘事务和新快照均成功后才原子切换。
@@ -99,7 +99,7 @@ with StockDataClient() as client:
     """)
 
     qfq = client.query("""
-        SELECT date, open, high, low, close, preclose
+        SELECT date, open, high, low, close
         FROM main_board_daily_qfq
         WHERE symbol = 'sh.600519'
         ORDER BY date
@@ -145,13 +145,13 @@ Get-Content .\runtime\FATAL_ERROR.json
 Get-Content .\logs\qstockdataserver.error.log -Tail 200
 
 # 2. 对数据库执行只读完整性检查
-.\.venv\Scripts\python.exe server.py doctor --config config.yaml
+.\.venv\Scripts\python.exe server.py doctor
 
 # 3. 只有确认上游/磁盘问题已经处理后才清除标记
-.\.venv\Scripts\python.exe server.py clear-fatal --config config.yaml --confirm
+.\.venv\Scripts\python.exe server.py clear-fatal --confirm
 
 # 4. 重新启动；首次导入中断时会续传
-.\.venv\Scripts\python.exe server.py serve --config config.yaml
+.\.venv\Scripts\python.exe server.py serve
 ```
 
 Linux 使用 `./.venv/bin/python` 执行相同子命令。不要直接删除数据库或致命标记；`clear-fatal` 会先强制运行 `doctor`。

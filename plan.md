@@ -435,9 +435,9 @@ WHERE NOT EXISTS (
 程序启动时必须先检查 `runtime/FATAL_ERROR.json`。标记存在时，打印上次致命错误摘要并拒绝启动、拒绝自动下载，避免 Windows 或 Linux 的开机自启动策略反复写入或反复请求。人工处理流程为：
 
 ```text
-python server.py doctor --config config.yaml
-python server.py clear-fatal --config config.yaml --confirm
-python server.py serve --config config.yaml
+python server.py doctor
+python server.py clear-fatal --confirm
+python server.py serve
 ```
 
 `doctor` 必须以只读方式检查配置、DuckDB schema、唯一键、日期覆盖、复权因子和最后一次已提交快照；只有检查通过后，`clear-fatal --confirm` 才允许删除致命错误标记。删除标记不修改行情数据和 `last_update_trade_date`。
