@@ -134,6 +134,9 @@ class StockDataService:
         with self.fetcher.session():
             if self.database.needs_initial_import():
                 self._initial_import()
+                # The fixed initial-import target may have become stale while a
+                # long import was running. Catch up before exposing any snapshot.
+                self._catch_up()
             else:
                 self._catch_up()
         snapshot = self.database.build_snapshot()

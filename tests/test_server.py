@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from datetime import date
 
 import pandas as pd
@@ -100,4 +101,45 @@ def test_catch_up_queries_latest_stock_list_once_and_backfills_new_stock(app_con
         (date(2024, 1, 3), False, 0),
         (date(2024, 1, 4), False, 0),
         (date(2024, 1, 5), True, 1),
+    ]
+
+
+def test_initialize_catches_up_after_fixed_target_initial_import(
+    app_config, monkeypatch
+) -> None:
+    service = StockDataService(app_config)
+    calls: list[str] = []
+
+    class Database:
+        def initialize_schema(self) -> None:
+            calls.append("schema")
+
+        def needs_initial_import(self) -> bool:
+            return True
+
+        def build_snapshot(self) -> object:
+            calls.append("snapshot")
+            return object()
+
+    class Fetcher:
+        @contextlib.contextmanager
+        def session(self):
+            calls.append("login")
+            yield self
+            calls.append("logout")
+
+    class Snapshots:
+        def swap(self, snapshot: object) -> None:
+            calls.append("swap")
+
+    service.database = Database()  # type: ignore[assignment]
+    service.fetcher = Fetcher()  # type: ignore[assignment]
+    service.snapshots = Snapshots()  # type: ignore[assignment]
+    monkeypatch.setattr(service, "_initial_import", lambda: calls.append("initial"))
+    monkeypatch.setattr(service, "_catch_up", lambda: calls.append("catch_up"))
+
+    service.initialize()
+
+    assert calls == [
+        "schema", "login", "initial", "catch_up", "logout", "snapshot", "swap"
     ]

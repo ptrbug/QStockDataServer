@@ -130,3 +130,30 @@ def test_blank_active_volume_is_fatal(app_config) -> None:
     fake.query_daily_history_k_AStock = blank_active  # type: ignore[method-assign]
     with pytest.raises(FatalDataError, match="正常交易股票.*volume 为空"):
         BaostockDataFetcher(app_config, fake).fetch_market_daily(date(2024, 1, 2))
+
+
+def test_stale_suspended_volume_is_canonicalized_only_when_amount_is_zero(
+    app_config,
+) -> None:
+    fake = FakeBS()
+    original = fake.query_daily_history_k_AStock
+
+    def stale_volume(date: str) -> Response:
+        result = original(date)
+        result.rows[1][7] = "38945309"
+        result.rows[1][8] = "0"
+        return result
+
+    fake.query_daily_history_k_AStock = stale_volume  # type: ignore[method-assign]
+    daily = BaostockDataFetcher(app_config, fake).fetch_market_daily(date(2024, 1, 2))
+    assert daily.loc[daily["symbol"].eq("sz.300001"), "volume"].item() == 0
+
+    def inconsistent_stopped(date: str) -> Response:
+        result = original(date)
+        result.rows[1][7] = "100"
+        result.rows[1][8] = "1"
+        return result
+
+    fake.query_daily_history_k_AStock = inconsistent_stopped  # type: ignore[method-assign]
+    with pytest.raises(FatalDataError, match="停牌行情"):
+        BaostockDataFetcher(app_config, fake).fetch_market_daily(date(2024, 1, 2))

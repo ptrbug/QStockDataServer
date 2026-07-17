@@ -272,6 +272,24 @@ class BaostockDataFetcher:
         if not np_all_integral(volume):
             raise FatalDataError(f"{operation} volume 包含非整数")
         frame["volume"] = volume.astype("int64")
+        suspended = frame["trade_status"].eq(0)
+        equal_prices = frame[["open", "high", "low", "close"]].max(axis=1).eq(
+            frame[["open", "high", "low", "close"]].min(axis=1)
+        )
+        stale_suspended_volume = (
+            suspended
+            & equal_prices
+            & frame["amount"].eq(0)
+            & frame["volume"].gt(0)
+        )
+        if stale_suspended_volume.any():
+            LOGGER.warning(
+                "%s 有 %d 条停牌行情残留了非零 volume，但 OHLC 相等且 amount=0，"
+                "按交易状态规范化为 0",
+                operation,
+                int(stale_suspended_volume.sum()),
+            )
+            frame.loc[stale_suspended_volume, "volume"] = 0
         for optional in ("turn", "pct_chg", "is_st"):
             if optional not in frame.columns:
                 frame[optional] = pd.NA
