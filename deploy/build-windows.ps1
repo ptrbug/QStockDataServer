@@ -65,4 +65,13 @@ if ($LASTEXITCODE -ne 0) {
     throw "Packaged executable smoke test failed with exit code $LASTEXITCODE."
 }
 
+& powershell `
+    -NoProfile `
+    -ExecutionPolicy Bypass `
+    -File (Join-Path $PackageRoot "install-autostart.ps1") `
+    -ValidateOnly
+if ($LASTEXITCODE -ne 0) {
+    throw "Autostart installer validation failed with exit code $LASTEXITCODE."
+}
+
 Write-Host "Windows package created: $PackageRoot"
