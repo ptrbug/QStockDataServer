@@ -13,7 +13,7 @@ factor_epsilon: 1.0e-10
 
 flight_host: "127.0.0.1"
 flight_port: 8815
-query_max_rows: 5000000
+query_max_rows: 50000000
 query_max_sql_length: 100000
 duckdb_threads: 4
 
