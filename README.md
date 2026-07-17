@@ -52,8 +52,7 @@ python3 -m venv .venv
 | `start_date`             | `2018-01-01`                      | 首次导入起始日                                 |
 | `update_time`            | `18:30`                           | 每日调度时间                                   |
 | `timezone`               | `Asia/Shanghai`                   | 调度时区                                       |
-| `retry_interval_minutes` | `5`                               | 临时 API 故障重试间隔                          |
-| `retry_delays_seconds`   | `[3, 30, 120]`                    | 前三次失败后的快速退避；后续使用上面的分钟间隔 |
+| `retry_delays_seconds`   | `[3, 30, 120, 300]`               | 各次失败后的退避秒数；列表耗尽后复用最后一个值 |
 | `max_retries`            | `12`                              | 每次 API 调用最大尝试次数                      |
 | `session_max_minutes`    | `30`                              | BaoStock 会话最长连续使用时间                  |
 | `session_max_requests`   | `500`                             | 单个 BaoStock 会话最大成功请求数               |

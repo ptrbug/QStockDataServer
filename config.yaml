@@ -3,12 +3,10 @@ start_date: "2018-01-01"
 update_time: "18:30"
 timezone: "Asia/Shanghai"
 
-retry_interval_minutes: 5
-retry_delays_seconds: [3, 30, 120]
+retry_delays_seconds: [3, 30, 120, 300]
 max_retries: 12
 session_max_minutes: 30
 session_max_requests: 500
-initial_import_batch_size: 100
 factor_epsilon: 1.0e-10
 
 flight_host: "127.0.0.1"

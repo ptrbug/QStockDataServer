@@ -464,12 +464,10 @@ python server.py serve --config config.yaml
 database_path: "data/stock_daily.duckdb"
 start_date: "2018-01-01"
 update_time: "18:30"
-retry_interval_minutes: 5
-retry_delays_seconds: [3, 30, 120]
+retry_delays_seconds: [3, 30, 120, 300]
 max_retries: 12
 session_max_minutes: 30
 session_max_requests: 500
-initial_import_batch_size: 100
 factor_epsilon: 1.0e-10
 flight_host: "127.0.0.1"
 flight_port: 8815
@@ -488,7 +486,7 @@ log_backup_count: 10
 3. 只对最新目标日获取一次证券列表，对每个缺失交易日获取全市场日 K，并在目标日同步更新股票列表；
 4. 没有缺失日期：记录“数据已是最新”，结束本次任务；
 5. 有缺失日期：执行批量抓取、staging 校验和事务写入；
-6. 网络异常或临时接口错误：立即废弃旧会话，前三次分别退避 3 秒、30 秒和 2 分钟，后续按 `retry_interval_minutes` 退避，并在下一次请求前重新登录；正常会话超过 30 分钟或 500 次成功请求时也在请求之间主动轮换；
+6. 网络异常或临时接口错误：立即废弃旧会话，依次按 `retry_delays_seconds` 退避，列表耗尽后复用最后一个延迟，并在下一次请求前重新登录；正常会话超过 30 分钟或 500 次成功请求时也在请求之间主动轮换；
 7. 当天为非交易日且没有缺失历史交易日：正常跳过，不进入失败重试；
 8. 达到最大重试次数仍失败：保留原 `last_update_trade_date`，写入 `CRITICAL` 日志并以退出码 `3` 终止程序，不继续提供查询服务。
 
@@ -826,7 +824,6 @@ fetch_market_daily_dates(trade_dates: list[str]) -> pandas.DataFrame
 - 历史数据起始日期；
 - 每日更新时间；
 - 重试间隔和最大重试次数；
-- 首次逐股历史导入的落库批次大小；
 - 复权因子比较误差 `factor_epsilon`；
 - Arrow Flight 地址和端口；
 - runtime 目录和致命错误标记位置；

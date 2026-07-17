@@ -64,7 +64,7 @@ class BaostockDataFetcher:
     def _retry_delay(self, attempt: int) -> int:
         if attempt <= len(self.config.retry_delays_seconds):
             return self.config.retry_delays_seconds[attempt - 1]
-        return self.config.retry_interval_minutes * 60
+        return self.config.retry_delays_seconds[-1]
 
     def _session_rotation_due(self) -> str | None:
         if not self._logged_in or self._session_started_at is None:

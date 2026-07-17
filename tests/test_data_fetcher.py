@@ -217,3 +217,12 @@ def test_session_rotates_between_requests_after_request_limit(app_config) -> Non
     assert fake.logout_count == 2
     assert fetcher._retry_delay(1) == 0
     assert fetcher._retry_delay(3) == 0
+
+
+def test_retry_delay_reuses_last_configured_delay(app_config) -> None:
+    config = replace(app_config, retry_delays_seconds=(3, 30, 120, 300))
+    fetcher = BaostockDataFetcher(config, FakeBS())
+
+    assert fetcher._retry_delay(1) == 3
+    assert fetcher._retry_delay(4) == 300
+    assert fetcher._retry_delay(5) == 300

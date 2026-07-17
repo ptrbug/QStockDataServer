@@ -52,12 +52,10 @@ class AppConfig:
     start_date: date
     update_time: time
     timezone: ZoneInfo
-    retry_interval_minutes: int
     retry_delays_seconds: tuple[int, ...]
     max_retries: int
     session_max_minutes: int
     session_max_requests: int
-    initial_import_batch_size: int
     factor_epsilon: float
     flight_host: str
     flight_port: int
@@ -85,12 +83,10 @@ DEFAULTS: dict[str, Any] = {
     "start_date": "2018-01-01",
     "update_time": "18:30",
     "timezone": "Asia/Shanghai",
-    "retry_interval_minutes": 5,
-    "retry_delays_seconds": [3, 30, 120],
+    "retry_delays_seconds": [3, 30, 120, 300],
     "max_retries": 12,
     "session_max_minutes": 30,
     "session_max_requests": 500,
-    "initial_import_batch_size": 100,
     "factor_epsilon": 1.0e-10,
     "flight_host": "127.0.0.1",
     "flight_port": 8815,
@@ -165,9 +161,6 @@ def load_config(path: str | Path) -> AppConfig:
         start_date=_parse_date(values["start_date"], "start_date"),
         update_time=_parse_time(values["update_time"], "update_time"),
         timezone=timezone,
-        retry_interval_minutes=_positive_int(
-            values["retry_interval_minutes"], "retry_interval_minutes", allow_zero=True
-        ),
         retry_delays_seconds=retry_delays,
         max_retries=_positive_int(values["max_retries"], "max_retries"),
         session_max_minutes=_positive_int(
@@ -175,9 +168,6 @@ def load_config(path: str | Path) -> AppConfig:
         ),
         session_max_requests=_positive_int(
             values["session_max_requests"], "session_max_requests"
-        ),
-        initial_import_batch_size=_positive_int(
-            values["initial_import_batch_size"], "initial_import_batch_size"
         ),
         factor_epsilon=factor_epsilon,
         flight_host=host,
