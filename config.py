@@ -53,7 +53,10 @@ class AppConfig:
     update_time: time
     timezone: ZoneInfo
     retry_interval_minutes: int
+    retry_delays_seconds: tuple[int, ...]
     max_retries: int
+    session_max_minutes: int
+    session_max_requests: int
     initial_import_batch_size: int
     factor_epsilon: float
     flight_host: str
@@ -83,7 +86,10 @@ DEFAULTS: dict[str, Any] = {
     "update_time": "18:30",
     "timezone": "Asia/Shanghai",
     "retry_interval_minutes": 5,
+    "retry_delays_seconds": [3, 30, 120],
     "max_retries": 12,
+    "session_max_minutes": 30,
+    "session_max_requests": 500,
     "initial_import_batch_size": 100,
     "factor_epsilon": 1.0e-10,
     "flight_host": "127.0.0.1",
@@ -145,6 +151,14 @@ def load_config(path: str | Path) -> AppConfig:
     if level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
         raise ConfigurationError(f"不支持的 log_level：{level}")
 
+    raw_delays = values["retry_delays_seconds"]
+    if not isinstance(raw_delays, list) or not raw_delays:
+        raise ConfigurationError("retry_delays_seconds 必须是非空整数列表")
+    retry_delays = tuple(
+        _positive_int(value, "retry_delays_seconds", allow_zero=True)
+        for value in raw_delays
+    )
+
     return AppConfig(
         config_path=config_path,
         database_path=_resolve(base_dir, values["database_path"], "database_path"),
@@ -154,7 +168,14 @@ def load_config(path: str | Path) -> AppConfig:
         retry_interval_minutes=_positive_int(
             values["retry_interval_minutes"], "retry_interval_minutes", allow_zero=True
         ),
+        retry_delays_seconds=retry_delays,
         max_retries=_positive_int(values["max_retries"], "max_retries"),
+        session_max_minutes=_positive_int(
+            values["session_max_minutes"], "session_max_minutes"
+        ),
+        session_max_requests=_positive_int(
+            values["session_max_requests"], "session_max_requests"
+        ),
         initial_import_batch_size=_positive_int(
             values["initial_import_batch_size"], "initial_import_batch_size"
         ),

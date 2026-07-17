@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 
 import pytest
@@ -157,3 +158,62 @@ def test_stale_suspended_volume_is_canonicalized_only_when_amount_is_zero(
     fake.query_daily_history_k_AStock = inconsistent_stopped  # type: ignore[method-assign]
     with pytest.raises(FatalDataError, match="停牌行情"):
         BaostockDataFetcher(app_config, fake).fetch_market_daily(date(2024, 1, 2))
+
+
+def test_temporary_query_error_reconnects_before_retry(app_config) -> None:
+    class FlakyBS(FakeBS):
+        def __init__(self) -> None:
+            self.login_count = 0
+            self.logout_count = 0
+            self.query_count = 0
+
+        def login(self) -> Response:
+            self.login_count += 1
+            return super().login()
+
+        def logout(self) -> Response:
+            self.logout_count += 1
+            return super().logout()
+
+        def query_all_stock(self, day: str) -> Response:
+            self.query_count += 1
+            if self.query_count == 1:
+                return Response(["code", "tradeStatus", "code_name"], [], "10002007")
+            return super().query_all_stock(day)
+
+    fake = FlakyBS()
+    fetcher = BaostockDataFetcher(app_config, fake)
+    with fetcher.session():
+        stocks = fetcher.fetch_stock_list(date(2024, 1, 2))
+
+    assert len(stocks) == 2
+    assert fake.query_count == 2
+    assert fake.login_count == 2
+    assert fake.logout_count == 2
+
+
+def test_session_rotates_between_requests_after_request_limit(app_config) -> None:
+    class CountingBS(FakeBS):
+        def __init__(self) -> None:
+            self.login_count = 0
+            self.logout_count = 0
+
+        def login(self) -> Response:
+            self.login_count += 1
+            return super().login()
+
+        def logout(self) -> Response:
+            self.logout_count += 1
+            return super().logout()
+
+    fake = CountingBS()
+    config = replace(app_config, session_max_requests=1)
+    fetcher = BaostockDataFetcher(config, fake)
+    with fetcher.session():
+        fetcher.fetch_stock_list(date(2024, 1, 2))
+        fetcher.fetch_stock_list(date(2024, 1, 2))
+
+    assert fake.login_count == 2
+    assert fake.logout_count == 2
+    assert fetcher._retry_delay(1) == 0
+    assert fetcher._retry_delay(3) == 0

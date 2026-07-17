@@ -53,7 +53,10 @@ python3 -m venv .venv
 | `update_time` | `18:30` | 每日调度时间 |
 | `timezone` | `Asia/Shanghai` | 调度时区 |
 | `retry_interval_minutes` | `5` | 临时 API 故障重试间隔 |
+| `retry_delays_seconds` | `[3, 30, 120]` | 前三次失败后的快速退避；后续使用上面的分钟间隔 |
 | `max_retries` | `12` | 每次 API 调用最大尝试次数 |
+| `session_max_minutes` | `30` | BaoStock 会话最长连续使用时间 |
+| `session_max_requests` | `500` | 单个 BaoStock 会话最大成功请求数 |
 | `factor_epsilon` | `1e-10` | 复权因子比较误差 |
 | `flight_host` | `127.0.0.1` | 只允许回环地址；服务没有远程认证 |
 | `flight_port` | `8815` | Arrow Flight TCP 端口 |
@@ -61,6 +64,8 @@ python3 -m venv .venv
 | `runtime_dir` | `runtime` | 锁文件和致命标记目录 |
 | `log_path` | `logs/qstockdataserver.log` | 滚动主日志 |
 | `error_log_path` | `logs/qstockdataserver.error.log` | ERROR/CRITICAL 日志 |
+
+临时网络或 BaoStock API 错误会立即废弃旧会话，依次等待 3 秒、30 秒、2 分钟，之后每次等待 5 分钟；只在下一次请求前重新登录。即使没有错误，会话使用超过 30 分钟或完成 500 次请求后，也会在两次请求之间主动轮换。结构、日期或行情内容错误不会自动重试。
 
 ## 首次启动与日常运行
 

@@ -58,23 +58,75 @@ class BaostockDataFetcher:
                 raise ConfigurationError("缺少 baostock，请先安装 requirements.txt") from exc
         self.bs = bs_module
         self._logged_in = False
+        self._session_started_at: float | None = None
+        self._session_successful_queries = 0
 
-    def _retry(self, operation: str, function: Callable[[], T]) -> T:
+    def _retry_delay(self, attempt: int) -> int:
+        if attempt <= len(self.config.retry_delays_seconds):
+            return self.config.retry_delays_seconds[attempt - 1]
+        return self.config.retry_interval_minutes * 60
+
+    def _session_rotation_due(self) -> str | None:
+        if not self._logged_in or self._session_started_at is None:
+            return None
+        age_seconds = time_module.monotonic() - self._session_started_at
+        if age_seconds >= self.config.session_max_minutes * 60:
+            return f"会话已使用 {age_seconds / 60:.1f} 分钟"
+        if self._session_successful_queries >= self.config.session_max_requests:
+            return f"会话已完成 {self._session_successful_queries} 次请求"
+        return None
+
+    def _login_once(self) -> None:
+        try:
+            response = self.bs.login()
+        except Exception as exc:
+            raise TemporarySourceAttemptError(f"Baostock 登录异常：{exc}") from exc
+        if str(getattr(response, "error_code", "")) != "0":
+            raise TemporarySourceAttemptError(
+                f"Baostock 登录失败 error_code={getattr(response, 'error_code', None)} "
+                f"error_msg={getattr(response, 'error_msg', None)}"
+            )
+        self._logged_in = True
+        self._session_started_at = time_module.monotonic()
+        self._session_successful_queries = 0
+        LOGGER.info("Baostock 登录成功")
+
+    def _retry(
+        self,
+        operation: str,
+        function: Callable[[], T],
+        *,
+        requires_session: bool = False,
+    ) -> T:
         last_error: BaseException | None = None
         for attempt in range(1, self.config.max_retries + 1):
             try:
+                if requires_session:
+                    rotation_reason = self._session_rotation_due()
+                    if rotation_reason:
+                        LOGGER.info("%s，下一请求前主动轮换 Baostock 会话", rotation_reason)
+                        self.logout()
+                    if not self._logged_in:
+                        self._login_once()
                 return function()
             except TemporarySourceAttemptError as exc:
                 last_error = exc
+                if requires_session:
+                    # A transport/protocol failure makes the current session
+                    # untrustworthy. Discard it immediately; login is delayed
+                    # until immediately before the next request.
+                    self.logout()
+                delay = self._retry_delay(attempt)
                 LOGGER.warning(
-                    "%s 第 %d/%d 次尝试失败：%s",
+                    "%s 第 %d/%d 次尝试失败：%s；%d 秒后重试",
                     operation,
                     attempt,
                     self.config.max_retries,
                     exc,
+                    delay,
                 )
                 if attempt < self.config.max_retries:
-                    time_module.sleep(self.config.retry_interval_minutes * 60)
+                    time_module.sleep(delay)
         raise TransientSourceError(
             f"{operation} 重试 {self.config.max_retries} 次后仍失败：{last_error}"
         ) from last_error
@@ -82,21 +134,7 @@ class BaostockDataFetcher:
     def login(self) -> None:
         if self._logged_in:
             return
-
-        def attempt() -> None:
-            try:
-                response = self.bs.login()
-            except Exception as exc:
-                raise TemporarySourceAttemptError(f"Baostock 登录异常：{exc}") from exc
-            if str(getattr(response, "error_code", "")) != "0":
-                raise TemporarySourceAttemptError(
-                    f"Baostock 登录失败 error_code={getattr(response, 'error_code', None)} "
-                    f"error_msg={getattr(response, 'error_msg', None)}"
-                )
-
-        self._retry("Baostock 登录", attempt)
-        self._logged_in = True
-        LOGGER.info("Baostock 登录成功")
+        self._retry("Baostock 登录", self._login_once)
 
     def logout(self) -> None:
         if not self._logged_in:
@@ -113,6 +151,8 @@ class BaostockDataFetcher:
             LOGGER.exception("Baostock 登出异常")
         finally:
             self._logged_in = False
+            self._session_started_at = None
+            self._session_successful_queries = 0
 
     @contextlib.contextmanager
     def session(self) -> Iterator["BaostockDataFetcher"]:
@@ -162,7 +202,9 @@ class BaostockDataFetcher:
                 raise TemporarySourceAttemptError(f"{operation} 调用异常：{exc}") from exc
             return self._consume_result(result, operation)
 
-        return self._retry(operation, attempt)
+        frame = self._retry(operation, attempt, requires_session=True)
+        self._session_successful_queries += 1
+        return frame
 
     @staticmethod
     def _require_raw_columns(frame: pd.DataFrame, required: Sequence[str], operation: str) -> None:

@@ -4,7 +4,10 @@ update_time: "18:30"
 timezone: "Asia/Shanghai"
 
 retry_interval_minutes: 5
+retry_delays_seconds: [3, 30, 120]
 max_retries: 12
+session_max_minutes: 30
+session_max_requests: 500
 initial_import_batch_size: 100
 factor_epsilon: 1.0e-10
 
@@ -20,4 +23,3 @@ error_log_path: "logs/qstockdataserver.error.log"
 log_level: "INFO"
 log_max_bytes: 10485760
 log_backup_count: 10
-
