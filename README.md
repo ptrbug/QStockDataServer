@@ -46,24 +46,24 @@ python3 -m venv .venv
 
 默认配置位于 `config.yaml`。相对路径都按配置文件所在目录解析，因此开机启动时不会把数据库或日志写入错误目录。
 
-| 配置项 | 默认值 | 说明 |
-| --- | --- | --- |
-| `database_path` | `data/stock_daily.duckdb` | 磁盘 DuckDB |
-| `start_date` | `2018-01-01` | 首次导入起始日 |
-| `update_time` | `18:30` | 每日调度时间 |
-| `timezone` | `Asia/Shanghai` | 调度时区 |
-| `retry_interval_minutes` | `5` | 临时 API 故障重试间隔 |
-| `retry_delays_seconds` | `[3, 30, 120]` | 前三次失败后的快速退避；后续使用上面的分钟间隔 |
-| `max_retries` | `12` | 每次 API 调用最大尝试次数 |
-| `session_max_minutes` | `30` | BaoStock 会话最长连续使用时间 |
-| `session_max_requests` | `500` | 单个 BaoStock 会话最大成功请求数 |
-| `factor_epsilon` | `1e-10` | 复权因子比较误差 |
-| `flight_host` | `127.0.0.1` | 只允许回环地址；服务没有远程认证 |
-| `flight_port` | `8815` | Arrow Flight TCP 端口 |
-| `query_max_rows` | `5000000` | 单次查询最大返回行数 |
-| `runtime_dir` | `runtime` | 锁文件和致命标记目录 |
-| `log_path` | `logs/qstockdataserver.log` | 滚动主日志 |
-| `error_log_path` | `logs/qstockdataserver.error.log` | ERROR/CRITICAL 日志 |
+| 配置项                   | 默认值                            | 说明                                           |
+| ------------------------ | --------------------------------- | ---------------------------------------------- |
+| `database_path`          | `data/stock_daily.duckdb`         | 磁盘 DuckDB                                    |
+| `start_date`             | `2018-01-01`                      | 首次导入起始日                                 |
+| `update_time`            | `18:30`                           | 每日调度时间                                   |
+| `timezone`               | `Asia/Shanghai`                   | 调度时区                                       |
+| `retry_interval_minutes` | `5`                               | 临时 API 故障重试间隔                          |
+| `retry_delays_seconds`   | `[3, 30, 120]`                    | 前三次失败后的快速退避；后续使用上面的分钟间隔 |
+| `max_retries`            | `12`                              | 每次 API 调用最大尝试次数                      |
+| `session_max_minutes`    | `30`                              | BaoStock 会话最长连续使用时间                  |
+| `session_max_requests`   | `500`                             | 单个 BaoStock 会话最大成功请求数               |
+| `factor_epsilon`         | `1e-10`                           | 复权因子比较误差                               |
+| `flight_host`            | `127.0.0.1`                       | 只允许回环地址；服务没有远程认证               |
+| `flight_port`            | `8815`                            | Arrow Flight TCP 端口                          |
+| `query_max_rows`         | `50000000`                        | 单次查询最大返回行数                           |
+| `runtime_dir`            | `runtime`                         | 锁文件和致命标记目录                           |
+| `log_path`               | `logs/qstockdataserver.log`       | 滚动主日志                                     |
+| `error_log_path`         | `logs/qstockdataserver.error.log` | ERROR/CRITICAL 日志                            |
 
 临时网络或 BaoStock API 错误会立即废弃旧会话，依次等待 3 秒、30 秒、2 分钟，之后每次等待 5 分钟；只在下一次请求前重新登录。即使没有错误，会话使用超过 30 分钟或完成 500 次请求后，也会在两次请求之间主动轮换。结构、日期或行情内容错误不会自动重试。
 
@@ -132,12 +132,12 @@ with StockDataClient() as client:
 
 退出码：
 
-| 退出码 | 含义 |
-| --- | --- |
-| `2` | 配置错误 |
-| `3` | 网络/API 临时错误重试耗尽 |
-| `4` | 行情数据校验或一致性错误 |
-| `5` | DuckDB、快照或其他存储错误 |
+| 退出码 | 含义                       |
+| ------ | -------------------------- |
+| `2`    | 配置错误                   |
+| `3`    | 网络/API 临时错误重试耗尽  |
+| `4`    | 行情数据校验或一致性错误   |
+| `5`    | DuckDB、快照或其他存储错误 |
 
 退出码 4、5 会写入致命标记。只要标记存在，`serve` 就拒绝启动，防止任务调度器反复运行或继续提供无法确认的快照。恢复流程：
 
