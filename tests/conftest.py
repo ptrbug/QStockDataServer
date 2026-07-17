@@ -20,7 +20,6 @@ def app_config(tmp_path: Path) -> AppConfig:
                 "retry_delays_seconds: [0, 0]",
                 "max_retries: 2",
                 "session_max_minutes: 30",
-                "session_max_requests: 500",
                 "factor_epsilon: 1.0e-10",
                 'flight_host: "127.0.0.1"',
                 "flight_port: 18815",

@@ -192,33 +192,6 @@ def test_temporary_query_error_reconnects_before_retry(app_config) -> None:
     assert fake.logout_count == 2
 
 
-def test_session_rotates_between_requests_after_request_limit(app_config) -> None:
-    class CountingBS(FakeBS):
-        def __init__(self) -> None:
-            self.login_count = 0
-            self.logout_count = 0
-
-        def login(self) -> Response:
-            self.login_count += 1
-            return super().login()
-
-        def logout(self) -> Response:
-            self.logout_count += 1
-            return super().logout()
-
-    fake = CountingBS()
-    config = replace(app_config, session_max_requests=1)
-    fetcher = BaostockDataFetcher(config, fake)
-    with fetcher.session():
-        fetcher.fetch_stock_list(date(2024, 1, 2))
-        fetcher.fetch_stock_list(date(2024, 1, 2))
-
-    assert fake.login_count == 2
-    assert fake.logout_count == 2
-    assert fetcher._retry_delay(1) == 0
-    assert fetcher._retry_delay(3) == 0
-
-
 def test_retry_delay_reuses_last_configured_delay(app_config) -> None:
     config = replace(app_config, retry_delays_seconds=(3, 30, 120, 300))
     fetcher = BaostockDataFetcher(config, FakeBS())

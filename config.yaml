@@ -6,7 +6,6 @@ timezone: "Asia/Shanghai"
 retry_delays_seconds: [3, 30, 120, 300]
 max_retries: 12
 session_max_minutes: 30
-session_max_requests: 500
 factor_epsilon: 1.0e-10
 
 flight_host: "127.0.0.1"

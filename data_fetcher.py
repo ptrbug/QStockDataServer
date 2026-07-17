@@ -59,7 +59,6 @@ class BaostockDataFetcher:
         self.bs = bs_module
         self._logged_in = False
         self._session_started_at: float | None = None
-        self._session_successful_queries = 0
 
     def _retry_delay(self, attempt: int) -> int:
         if attempt <= len(self.config.retry_delays_seconds):
@@ -72,8 +71,6 @@ class BaostockDataFetcher:
         age_seconds = time_module.monotonic() - self._session_started_at
         if age_seconds >= self.config.session_max_minutes * 60:
             return f"会话已使用 {age_seconds / 60:.1f} 分钟"
-        if self._session_successful_queries >= self.config.session_max_requests:
-            return f"会话已完成 {self._session_successful_queries} 次请求"
         return None
 
     def _login_once(self) -> None:
@@ -88,7 +85,6 @@ class BaostockDataFetcher:
             )
         self._logged_in = True
         self._session_started_at = time_module.monotonic()
-        self._session_successful_queries = 0
         LOGGER.info("Baostock 登录成功")
 
     def _retry(
@@ -152,7 +148,6 @@ class BaostockDataFetcher:
         finally:
             self._logged_in = False
             self._session_started_at = None
-            self._session_successful_queries = 0
 
     @contextlib.contextmanager
     def session(self) -> Iterator["BaostockDataFetcher"]:
@@ -202,9 +197,7 @@ class BaostockDataFetcher:
                 raise TemporarySourceAttemptError(f"{operation} 调用异常：{exc}") from exc
             return self._consume_result(result, operation)
 
-        frame = self._retry(operation, attempt, requires_session=True)
-        self._session_successful_queries += 1
-        return frame
+        return self._retry(operation, attempt, requires_session=True)
 
     @staticmethod
     def _require_raw_columns(frame: pd.DataFrame, required: Sequence[str], operation: str) -> None:

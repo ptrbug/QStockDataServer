@@ -55,7 +55,6 @@ class AppConfig:
     retry_delays_seconds: tuple[int, ...]
     max_retries: int
     session_max_minutes: int
-    session_max_requests: int
     factor_epsilon: float
     flight_host: str
     flight_port: int
@@ -86,7 +85,6 @@ DEFAULTS: dict[str, Any] = {
     "retry_delays_seconds": [3, 30, 120, 300],
     "max_retries": 12,
     "session_max_minutes": 30,
-    "session_max_requests": 500,
     "factor_epsilon": 1.0e-10,
     "flight_host": "127.0.0.1",
     "flight_port": 8815,
@@ -165,9 +163,6 @@ def load_config(path: str | Path) -> AppConfig:
         max_retries=_positive_int(values["max_retries"], "max_retries"),
         session_max_minutes=_positive_int(
             values["session_max_minutes"], "session_max_minutes"
-        ),
-        session_max_requests=_positive_int(
-            values["session_max_requests"], "session_max_requests"
         ),
         factor_epsilon=factor_epsilon,
         flight_host=host,
