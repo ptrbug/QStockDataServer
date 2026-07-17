@@ -156,16 +156,37 @@ Get-Content .\logs\qstockdataserver.error.log -Tail 200
 
 Linux 使用 `./.venv/bin/python` 执行相同子命令。不要直接删除数据库或致命标记；`clear-fatal` 会先强制运行 `doctor`。
 
-## Windows 开机自启动
+## Windows 打包与开机自启动
 
-以管理员身份打开 PowerShell，在项目根目录执行：
+PyInstaller 只能为当前操作系统生成可执行文件，因此 Windows 版本需要在 Windows 上构建。目录版产物不会在每次启动时解压，也便于将配置、数据和日志保留在程序外部。
+
+先安装开发依赖并构建：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\deploy\windows-autostart.ps1 `
-  -ProjectRoot "C:\QStockDataServer"
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+powershell -ExecutionPolicy Bypass -File .\deploy\build-windows.ps1
 ```
 
-脚本会验证虚拟环境、服务程序和配置文件，然后注册 SYSTEM 开机任务。常用命令：
+构建结果位于 `dist\QStockDataServer`。先执行以下检查，然后把整个目录复制到固定安装位置；不要只复制 exe，因为 `_internal` 中包含运行依赖。
+
+```powershell
+.\dist\QStockDataServer\QStockDataServer.exe --help
+$InstallRoot = "D:\Apps\QStockDataServer"  # 修改为自己选择的安装目录
+New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
+Copy-Item -Recurse -Force .\dist\QStockDataServer\* $InstallRoot
+```
+
+`dist` 是可重新生成的构建目录，不要直接在其中长期运行或保存正式数据库。安装目录中的 `config.yaml`、`data`、`logs`、`runtime` 都位于可执行文件外部，升级时应保留它们。
+
+确认 `$InstallRoot` 目录中的 `config.yaml` 后，在同一个管理员 PowerShell 窗口中注册 SYSTEM 开机任务：
+
+```powershell
+powershell -ExecutionPolicy Bypass `
+  -File "$InstallRoot\install-autostart.ps1" `
+  -InstallRoot $InstallRoot
+```
+
+任务的工作目录固定为安装目录，实际命令是 `QStockDataServer.exe serve`，所以会使用同目录下默认的 `config.yaml`。安装脚本会立即启动任务。常用命令：
 
 ```powershell
 Get-ScheduledTask -TaskName "QStockDataServer"
@@ -173,12 +194,12 @@ Get-ScheduledTaskInfo -TaskName "QStockDataServer"
 Stop-ScheduledTask -TaskName "QStockDataServer"
 Start-ScheduledTask -TaskName "QStockDataServer"
 Unregister-ScheduledTask -TaskName "QStockDataServer" -Confirm:$false
-Get-Content "C:\QStockDataServer\logs\qstockdataserver.error.log" -Wait
+Get-Content (Join-Path $InstallRoot "logs\qstockdataserver.error.log") -Wait
 ```
 
 ## Linux systemd 开机自启动
 
-模板默认项目路径为 `/opt/QStockDataServer`、用户为 `qstock`；如果安装位置不同，先编辑 `deploy/qstockdataserver.service` 中的绝对路径。
+Linux 长期服务建议直接使用 `.venv + systemd`，不额外封装可执行文件，依赖更新和故障排查更清楚。模板默认项目路径为 `/opt/QStockDataServer`、用户为 `qstock`；如果安装位置不同，先编辑 `deploy/qstockdataserver.service` 中的绝对路径。
 
 ```bash
 id -u qstock >/dev/null 2>&1 || sudo useradd --system \

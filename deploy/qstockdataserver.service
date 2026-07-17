@@ -10,7 +10,7 @@ Type=simple
 User=qstock
 Group=qstock
 WorkingDirectory=/opt/QStockDataServer
-ExecStart=/opt/QStockDataServer/.venv/bin/python /opt/QStockDataServer/server.py serve --config /opt/QStockDataServer/config.yaml
+ExecStart=/opt/QStockDataServer/.venv/bin/python /opt/QStockDataServer/server.py serve
 Environment=PYTHONUNBUFFERED=1
 Restart=on-failure
 RestartSec=10

@@ -1,25 +1,24 @@
 param(
     [Parameter(Mandatory = $false)]
-    [string]$ProjectRoot = (Split-Path -Parent $PSScriptRoot),
+    [string]$InstallRoot = $PSScriptRoot,
     [string]$TaskName = "QStockDataServer"
 )
 
 $ErrorActionPreference = "Stop"
-$ProjectRoot = (Resolve-Path -LiteralPath $ProjectRoot).Path
-$Python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
-$Server = Join-Path $ProjectRoot "server.py"
-$Config = Join-Path $ProjectRoot "config.yaml"
+$InstallRoot = (Resolve-Path -LiteralPath $InstallRoot).Path
+$Executable = Join-Path $InstallRoot "QStockDataServer.exe"
+$Config = Join-Path $InstallRoot "config.yaml"
 
-foreach ($Path in @($Python, $Server, $Config)) {
+foreach ($Path in @($Executable, $Config)) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw "Required file does not exist: $Path"
     }
 }
 
 $Action = New-ScheduledTaskAction `
-    -Execute $Python `
-    -Argument "`"$Server`" serve --config `"$Config`"" `
-    -WorkingDirectory $ProjectRoot
+    -Execute $Executable `
+    -Argument "serve" `
+    -WorkingDirectory $InstallRoot
 
 $Trigger = New-ScheduledTaskTrigger -AtStartup
 
@@ -41,4 +40,3 @@ Register-ScheduledTask `
 
 Start-ScheduledTask -TaskName $TaskName
 Write-Host "Installed and started scheduled task '$TaskName'."
-
