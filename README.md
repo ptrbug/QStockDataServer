@@ -12,7 +12,7 @@ QStockDataServer 是一个面向 A 股主板、创业板的本地日线行情服
 - 增量更新：只对最新目标交易日调用一次 `query_all_stock(day)` 更新证券列表；然后按缺失交易日逐日调用 `query_daily_history_k_AStock(date)` 获取日 K。即使一年未更新，也只需调用一次证券列表接口和约 240 次全市场日线接口。
 - 新增股票：将最新证券列表与本地列表比较，每只新增股票调用一次 `query_history_k_data_plus(..., frequency="d", adjustflag="3")` 回补完整历史。历史回补、最新证券列表和目标日日 K 在同一事务提交；目标日逐字段不一致会整体回滚。
 - 正式存储：`main_board_daily`、`gem_board_daily` 保存不复权 OHLC、`preclose`、成交量、成交额及 `qfq_factor`。
-- 查询：原始表返回不复权价格，`main_board_daily_qfq`、`gem_board_daily_qfq` 返回动态前复权价格。
+- 查询：原始表返回不复权价格；内存快照构建时一次性预计算前复权 OHLC，`main_board_daily_qfq`、`gem_board_daily_qfq` 只投影预计算列，不在每次查询时重复乘因子。前复权视图不包含 `preclose`。
 
 BaoStock 的接口实际会把部分停牌证券的 `volume`、`amount` 返回为空，个别历史停牌日还会在 `amount=0` 时残留上一交易日的非零 `volume`。程序仅在 `tradestatus=0`、OHLC 相等且成交额为 0 时把停牌成交量规范化为 0，随后仍强制检查停牌 OHLC 相等且量额为 0；正常交易证券出现空量额，或停牌日存在非零成交额/不同价格，都会立即中止。
 

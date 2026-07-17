@@ -528,11 +528,20 @@ log_backup_count: 10
 ```sql
 ATTACH 'data/stock_daily.duckdb' AS disk_db (READ_ONLY);
 
-CREATE TABLE main_board_daily AS
-SELECT * FROM disk_db.main_board_daily;
+CREATE TABLE _main_board_daily_snapshot AS
+SELECT *,
+       open * qfq_factor AS _qfq_open,
+       high * qfq_factor AS _qfq_high,
+       low * qfq_factor AS _qfq_low,
+       close * qfq_factor AS _qfq_close
+FROM disk_db.main_board_daily;
 
-CREATE TABLE gem_board_daily AS
-SELECT * FROM disk_db.gem_board_daily;
+CREATE VIEW main_board_daily AS
+SELECT symbol, date, open, high, low, close, preclose,
+       volume, amount, trade_status, qfq_factor
+FROM _main_board_daily_snapshot;
+
+-- 创业板使用同样结构创建 _gem_board_daily_snapshot 和 gem_board_daily。
 
 CREATE TABLE main_board_stock_list AS
 SELECT * FROM disk_db.main_board_stock_list;
@@ -552,32 +561,30 @@ CREATE VIEW main_board_daily_qfq AS
 SELECT
     symbol,
     date,
-    open * qfq_factor AS open,
-    high * qfq_factor AS high,
-    low * qfq_factor AS low,
-    close * qfq_factor AS close,
-    preclose * qfq_factor AS preclose,
+    _qfq_open AS open,
+    _qfq_high AS high,
+    _qfq_low AS low,
+    _qfq_close AS close,
     volume,
     amount,
     trade_status
-FROM main_board_daily;
+FROM _main_board_daily_snapshot;
 
 CREATE VIEW gem_board_daily_qfq AS
 SELECT
     symbol,
     date,
-    open * qfq_factor AS open,
-    high * qfq_factor AS high,
-    low * qfq_factor AS low,
-    close * qfq_factor AS close,
-    preclose * qfq_factor AS preclose,
+    _qfq_open AS open,
+    _qfq_high AS high,
+    _qfq_low AS low,
+    _qfq_close AS close,
     volume,
     amount,
     trade_status
-FROM gem_board_daily;
+FROM _gem_board_daily_snapshot;
 ```
 
-策略进程查询 `main_board_daily`、`gem_board_daily` 获得不复权价格，查询 `main_board_daily_qfq`、`gem_board_daily_qfq` 获得前复权价格。两个板块都可以使用 `UNION ALL` 合并查询。
+策略进程查询 `main_board_daily`、`gem_board_daily` 获得不复权价格，查询 `main_board_daily_qfq`、`gem_board_daily_qfq` 获得前复权价格。前复权乘法只在构建新内存快照时执行一次，查询视图只做列投影；前复权视图不返回 `preclose`。两个板块都可以使用 `UNION ALL` 合并查询。
 
 ### 13. 进程间通信
 

@@ -125,6 +125,19 @@ def test_initial_import_incremental_factor_and_snapshot(app_config) -> None:
     try:
         result = snapshot.query("SELECT max(date) AS max_date FROM main_board_daily")
         assert result.column("max_date")[0].as_py() == ex_date
+        qfq_columns = snapshot.connection.execute(
+            "DESCRIBE main_board_daily_qfq"
+        ).fetchdf()["column_name"].tolist()
+        assert qfq_columns == [
+            "symbol", "date", "open", "high", "low", "close",
+            "volume", "amount", "trade_status",
+        ]
+        view_sql = snapshot.connection.execute(
+            "SELECT sql FROM duckdb_views() "
+            "WHERE view_name='main_board_daily_qfq'"
+        ).fetchone()[0]
+        assert "qfq_factor" not in view_sql
+        assert "_qfq_open" in view_sql
     finally:
         snapshot.close()
 

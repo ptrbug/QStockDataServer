@@ -33,6 +33,10 @@ SNAPSHOT_TABLES = [
     "adjustment_events",
     "meta",
 ]
+DAILY_SNAPSHOT_COLUMNS = (
+    "symbol, date, open, high, low, close, preclose, volume, amount, "
+    "trade_status, qfq_factor"
+)
 
 
 DDL = """
@@ -791,28 +795,44 @@ class DuckDBManager:
             for name, table in tables.items():
                 stage = f"source_{name}"
                 memory.register(stage, table)
-                memory.execute(f"CREATE TABLE {name} AS SELECT * FROM {stage}")
+                if name in DAILY_TABLES.values():
+                    storage = f"_{name}_snapshot"
+                    memory.execute(
+                        f"""
+                        CREATE TABLE {storage} AS
+                        SELECT *,
+                               open*qfq_factor AS _qfq_open,
+                               high*qfq_factor AS _qfq_high,
+                               low*qfq_factor AS _qfq_low,
+                               close*qfq_factor AS _qfq_close
+                        FROM {stage}
+                        """
+                    )
+                    memory.execute(
+                        f"CREATE VIEW {name} AS "
+                        f"SELECT {DAILY_SNAPSHOT_COLUMNS} FROM {storage}"
+                    )
+                else:
+                    memory.execute(f"CREATE TABLE {name} AS SELECT * FROM {stage}")
                 memory.unregister(stage)
             memory.execute(
                 """
                 CREATE VIEW main_board_daily_qfq AS
                 SELECT symbol, date,
-                       open*qfq_factor AS open, high*qfq_factor AS high,
-                       low*qfq_factor AS low, close*qfq_factor AS close,
-                       preclose*qfq_factor AS preclose,
+                       _qfq_open AS open, _qfq_high AS high,
+                       _qfq_low AS low, _qfq_close AS close,
                        volume, amount, trade_status
-                FROM main_board_daily
+                FROM _main_board_daily_snapshot
                 """
             )
             memory.execute(
                 """
                 CREATE VIEW gem_board_daily_qfq AS
                 SELECT symbol, date,
-                       open*qfq_factor AS open, high*qfq_factor AS high,
-                       low*qfq_factor AS low, close*qfq_factor AS close,
-                       preclose*qfq_factor AS preclose,
+                       _qfq_open AS open, _qfq_high AS high,
+                       _qfq_low AS low, _qfq_close AS close,
                        volume, amount, trade_status
-                FROM gem_board_daily
+                FROM _gem_board_daily_snapshot
                 """
             )
             meta_rows = memory.execute("SELECT key, value FROM meta").fetchall()
