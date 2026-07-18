@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import time
 from pathlib import Path
@@ -20,6 +21,12 @@ QUERY_OBJECTS = (
     "cyb_stock_list",
 )
 PRINT_ROW_LIMIT = 100
+
+
+def _print_status(host: str, port: int, status: dict[str, object]) -> None:
+    print(f"Connected to QStockDataServer {host}:{port}")
+    print("Service status:")
+    print(json.dumps(status, ensure_ascii=False, indent=2, default=str))
 
 
 def _print_query_objects(client: StockDataClient) -> None:
@@ -123,11 +130,7 @@ def main() -> int:
         config = load_config(config_path)
         with StockDataClient(config.flight_host, config.flight_port) as client:
             status = client.status()
-            print(
-                f"已连接 QStockDataServer {config.flight_host}:{config.flight_port}，"
-                f"状态={status.get('state')}，"
-                f"快照日期={status.get('snapshot_last_update_trade_date')}"
-            )
+            _print_status(config.flight_host, config.flight_port, status)
             _print_query_objects(client)
             _interactive_loop(client)
         return 0

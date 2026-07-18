@@ -24,7 +24,7 @@ from .logging_config import (
     log_context,
     new_run_id,
 )
-from .strategy_launcher import StrategyProgramLauncher
+from .strategy_launcher import StrategyLaunchReason, StrategyProgramLauncher
 from .validation import validate_daily_pair
 
 
@@ -216,7 +216,7 @@ class StockDataService:
                     LOGGER.info("内存快照切换完成，版本=%s", snapshot.version)
                 self._set_state("ready")
                 if changed:
-                    self._launch_strategy_programs(snapshot.version)
+                    self._launch_strategy_programs(snapshot.version, reason="updated")
         except BaseException as exc:
             if not isinstance(exc, QStockError):
                 exc = StorageError(f"未处理的更新异常：{exc}")
@@ -240,12 +240,18 @@ class StockDataService:
         thread.start()
         return True
 
-    def _launch_strategy_programs(self, snapshot_version: str | None) -> None:
+    def _launch_strategy_programs(
+        self,
+        snapshot_version: str | None,
+        *,
+        reason: StrategyLaunchReason,
+    ) -> None:
         if snapshot_version is None or self._flight is None:
             return
         self.strategy_launcher.launch_all(
             flight_port=self._flight.port,
             snapshot_version=snapshot_version,
+            reason=reason,
         )
 
     def serve(self) -> int:
@@ -262,7 +268,7 @@ class StockDataService:
             status_provider=self.status,
             trigger_update=self.trigger_update,
         )
-        self._launch_strategy_programs(self.snapshots.version)
+        self._launch_strategy_programs(self.snapshots.version, reason="startup")
         self._scheduler = BackgroundScheduler(timezone=self.config.timezone)
         self._scheduler.add_job(
             self.scheduled_update,

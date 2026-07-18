@@ -21,3 +21,7 @@ error_log_path: "logs/qstockdataserver.error.log"
 log_level: "INFO"
 log_max_bytes: 10485760
 log_backup_count: 10
+
+strategy_programs:
+  enabled: false
+  items: []

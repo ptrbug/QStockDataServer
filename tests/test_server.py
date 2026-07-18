@@ -180,8 +180,14 @@ def test_update_worker_launches_strategy_programs_after_snapshot_swap(
         port = 18815
 
     class Launcher:
-        def launch_all(self, *, flight_port: int, snapshot_version: str) -> None:
-            calls.append(("launch", (flight_port, snapshot_version)))
+        def launch_all(
+            self,
+            *,
+            flight_port: int,
+            snapshot_version: str,
+            reason: str,
+        ) -> None:
+            calls.append(("launch", (flight_port, snapshot_version, reason)))
 
     service.fetcher = Fetcher()  # type: ignore[assignment]
     service.database = Database()  # type: ignore[assignment]
@@ -195,7 +201,7 @@ def test_update_worker_launches_strategy_programs_after_snapshot_swap(
     assert calls == [
         ("build_snapshot", None),
         ("swap", "2024-01-05"),
-        ("launch", (18815, "2024-01-05")),
+        ("launch", (18815, "2024-01-05", "updated")),
     ]
 
 
@@ -244,8 +250,14 @@ def test_serve_launches_strategy_programs_for_existing_startup_snapshot(
             calls.append(("scheduler_shutdown", wait))
 
     class Launcher:
-        def launch_all(self, *, flight_port: int, snapshot_version: str) -> None:
-            calls.append(("launch", (flight_port, snapshot_version)))
+        def launch_all(
+            self,
+            *,
+            flight_port: int,
+            snapshot_version: str,
+            reason: str,
+        ) -> None:
+            calls.append(("launch", (flight_port, snapshot_version, reason)))
 
     apscheduler = types.ModuleType("apscheduler")
     schedulers = types.ModuleType("apscheduler.schedulers")
@@ -260,7 +272,7 @@ def test_serve_launches_strategy_programs_for_existing_startup_snapshot(
     service.strategy_launcher = Launcher()  # type: ignore[assignment]
 
     assert service.serve() == 0
-    assert ("launch", (19999, "2024-01-05")) in calls
+    assert ("launch", (19999, "2024-01-05", "startup")) in calls
     assert calls.index(("flight_init", None)) < calls.index(
-        ("launch", (19999, "2024-01-05"))
+        ("launch", (19999, "2024-01-05", "startup"))
     )

@@ -38,7 +38,11 @@ def test_strategy_launcher_appends_default_flight_arguments(monkeypatch) -> None
         )
     )
 
-    launcher.launch_all(flight_port=8815, snapshot_version="2024-01-05")
+    launcher.launch_all(
+        flight_port=8815,
+        snapshot_version="2024-01-05",
+        reason="updated",
+    )
 
     assert calls == [
         (
@@ -49,6 +53,8 @@ def test_strategy_launcher_appends_default_flight_arguments(monkeypatch) -> None
                 "grpc://127.0.0.1:8815",
                 "--version",
                 "2024-01-05",
+                "--reason",
+                "updated",
             ],
             str(cwd),
             True,
@@ -69,16 +75,18 @@ def test_strategy_launcher_disabled_does_not_start_process(monkeypatch) -> None:
         )
     )
 
-    launcher.launch_all(flight_port=8815, snapshot_version="2024-01-05")
+    launcher.launch_all(
+        flight_port=8815,
+        snapshot_version="2024-01-05",
+        reason="startup",
+    )
 
     assert calls == []
 
 
 def test_strategy_programs_config_is_loaded_from_yaml(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
-    strategy_path = tmp_path / "strategies.yaml"
-    config_path.write_text("", encoding="utf-8")
-    strategy_path.write_text(
+    config_path.write_text(
         "\n".join(
             [
                 "strategy_programs:",
@@ -96,7 +104,6 @@ def test_strategy_programs_config_is_loaded_from_yaml(tmp_path: Path) -> None:
 
     config = load_config(config_path)
 
-    assert config.strategy_config_path == strategy_path
     assert config.strategy_programs.enabled is True
     assert len(config.strategy_programs.items) == 1
     item = config.strategy_programs.items[0]
@@ -107,9 +114,7 @@ def test_strategy_programs_config_is_loaded_from_yaml(tmp_path: Path) -> None:
 
 def test_strategy_programs_enabled_must_be_boolean(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
-    strategy_path = tmp_path / "strategies.yaml"
-    config_path.write_text("", encoding="utf-8")
-    strategy_path.write_text(
+    config_path.write_text(
         "\n".join(["strategy_programs:", '  enabled: "false"', "  items: []"]),
         encoding="utf-8",
     )
@@ -118,12 +123,13 @@ def test_strategy_programs_enabled_must_be_boolean(tmp_path: Path) -> None:
         load_config(config_path)
 
 
-def test_missing_strategies_yaml_disables_strategy_programs(tmp_path: Path) -> None:
+def test_missing_strategy_programs_config_disables_strategy_programs(
+    tmp_path: Path,
+) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text("", encoding="utf-8")
 
     config = load_config(config_path)
 
-    assert config.strategy_config_path == tmp_path / "strategies.yaml"
     assert config.strategy_programs.enabled is False
     assert config.strategy_programs.items == ()

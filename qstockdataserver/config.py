@@ -70,7 +70,6 @@ class StrategyProgramsConfig:
 @dataclass(frozen=True, slots=True)
 class AppConfig:
     config_path: Path
-    strategy_config_path: Path
     database_path: Path
     boards: tuple[str, ...]
     start_date: date
@@ -123,6 +122,7 @@ DEFAULTS: dict[str, Any] = {
     "query_max_rows": 5_000_000,
     "query_max_sql_length": 100_000,
     "duckdb_threads": 4,
+    "strategy_programs": {"enabled": False, "items": []},
 }
 
 
@@ -170,23 +170,6 @@ def _parse_strategy_programs(base_dir: Path, value: Any) -> StrategyProgramsConf
     return StrategyProgramsConfig(enabled=enabled, items=tuple(items))
 
 
-def _load_strategy_programs(path: Path) -> StrategyProgramsConfig:
-    try:
-        import yaml
-    except ImportError as exc:  # pragma: no cover - dependency error path
-        raise ConfigurationError("缺少 PyYAML，请先安装 requirements.txt") from exc
-
-    if not path.is_file():
-        return StrategyProgramsConfig(enabled=False, items=())
-    try:
-        loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError) as exc:
-        raise ConfigurationError(f"无法读取策略配置文件 {path}: {exc}") from exc
-    if not isinstance(loaded, dict):
-        raise ConfigurationError("strategies.yaml 顶层必须是 key/value 映射")
-    return _parse_strategy_programs(path.parent, loaded.get("strategy_programs"))
-
-
 def load_config(path: str | Path) -> AppConfig:
     try:
         import yaml
@@ -205,8 +188,6 @@ def load_config(path: str | Path) -> AppConfig:
 
     values = {**DEFAULTS, **loaded}
     base_dir = config_path.parent
-    strategy_config_path = base_dir / "strategies.yaml"
-    strategy_programs = _load_strategy_programs(strategy_config_path)
     try:
         timezone = ZoneInfo(str(values["timezone"]))
     except ZoneInfoNotFoundError as exc:
@@ -258,7 +239,6 @@ def load_config(path: str | Path) -> AppConfig:
 
     return AppConfig(
         config_path=config_path,
-        strategy_config_path=strategy_config_path,
         database_path=_resolve(base_dir, values["database_path"], "database_path"),
         boards=boards,
         start_date=_parse_date(values["start_date"], "start_date"),
@@ -285,5 +265,7 @@ def load_config(path: str | Path) -> AppConfig:
             values["query_max_sql_length"], "query_max_sql_length"
         ),
         duckdb_threads=_positive_int(values["duckdb_threads"], "duckdb_threads"),
-        strategy_programs=strategy_programs,
+        strategy_programs=_parse_strategy_programs(
+            base_dir, values.get("strategy_programs")
+        ),
     )
