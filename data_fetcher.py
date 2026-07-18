@@ -11,7 +11,7 @@ from typing import Any, TypeVar
 
 import pandas as pd
 
-from config import AppConfig
+from config import AppConfig, SUPPORTED_BOARDS
 from exceptions import (
     ConfigurationError,
     FatalDataError,
@@ -38,13 +38,15 @@ def classify_board(symbol: str) -> str | None:
     if value.startswith("sh.") and len(value) == 9:
         code = value[3:]
         if code.startswith(("600", "601", "603", "605", "609")):
-            return "main"
+            return "zb"
+        if code.startswith(("688", "689")):
+            return "kcb"
     if value.startswith("sz.") and len(value) == 9:
         code = value[3:]
         if code.startswith(("000", "001", "002", "003")):
-            return "main"
+            return "zb"
         if code.startswith(("300", "301")):
-            return "gem"
+            return "cyb"
     return None
 
 
@@ -259,7 +261,7 @@ class BaostockDataFetcher:
         )
         frame["symbol"] = frame["symbol"].astype(str).str.lower().str.strip()
         frame["board"] = frame["symbol"].map(classify_board)
-        frame = frame.loc[frame["board"].notna()].reset_index(drop=True)
+        frame = frame.loc[frame["board"].isin(self.config.boards)].reset_index(drop=True)
         self._nonempty(
             frame,
             [
@@ -381,7 +383,7 @@ class BaostockDataFetcher:
         return dates[-1]
 
     def fetch_stock_list(self, trade_date: str | date, board: str | None = None) -> pd.DataFrame:
-        if board not in {None, "main", "gem"}:
+        if board is not None and board not in SUPPORTED_BOARDS:
             raise ConfigurationError(f"不支持的板块：{board}")
         requested = date.fromisoformat(str(trade_date))
         raw = self._query(
@@ -394,7 +396,7 @@ class BaostockDataFetcher:
         ).copy()
         frame["symbol"] = frame["symbol"].astype(str).str.lower().str.strip()
         frame["board"] = frame["symbol"].map(classify_board)
-        frame = frame.loc[frame["board"].notna()].copy()
+        frame = frame.loc[frame["board"].isin(self.config.boards)].copy()
         self._nonempty(frame, ["symbol", "trade_status", "name"], "query_all_stock")
         frame["name"] = frame["name"].astype(str).str.strip()
         try:

@@ -13,7 +13,7 @@ def daily_frame(rows: list[dict]) -> pd.DataFrame:
     defaults = {
         "adjustflag": 3,
         "trade_status": 1,
-        "board": "main",
+        "board": "zb",
         "volume": 100,
         "amount": 1000.0,
     }
@@ -79,7 +79,7 @@ def test_suspended_row_and_pair_validation() -> None:
     trade_date = date(2024, 1, 2)
     stocks = pd.DataFrame(
         [
-            {"symbol": "sh.600000", "name": "浦发银行", "trade_status": 0, "board": "main"}
+            {"symbol": "sh.600000", "name": "浦发银行", "trade_status": 0, "board": "zb"}
         ]
     )
     daily = daily_frame(
@@ -103,4 +103,3 @@ def test_suspended_row_and_pair_validation() -> None:
     stocks.loc[0, "trade_status"] = 1
     with pytest.raises(FatalDataError, match="交易状态"):
         validate_daily_pair(stocks, daily, trade_date)
-

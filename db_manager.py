@@ -16,31 +16,33 @@ from typing import Any, Iterator
 import duckdb
 import pandas as pd
 
-from config import AppConfig
+from config import AppConfig, SUPPORTED_BOARDS
 from exceptions import ConfigurationError, FatalDataError, StorageError
 from validation import calculate_qfq_factors
 
 
 LOGGER = logging.getLogger(__name__)
-SCHEMA_VERSION = "1"
-DAILY_TABLES = {"main": "main_board_daily", "gem": "gem_board_daily"}
-STOCK_TABLES = {"main": "main_board_stock_list", "gem": "gem_board_stock_list"}
+DAILY_TABLE = "daily"
+STOCK_TABLE = "stock_list"
 SNAPSHOT_TABLES = [
-    "main_board_daily",
-    "gem_board_daily",
-    "main_board_stock_list",
-    "gem_board_stock_list",
+    DAILY_TABLE,
+    STOCK_TABLE,
     "adjustment_events",
     "meta",
 ]
-DAILY_SNAPSHOT_COLUMNS = (
-    "symbol, date, open, high, low, close, preclose, volume, amount, "
-    "trade_status, qfq_factor"
-)
+BOARD_SQL = {
+    "zb": "(symbol LIKE 'sh.600%' OR symbol LIKE 'sh.601%' OR "
+          "symbol LIKE 'sh.603%' OR symbol LIKE 'sh.605%' OR "
+          "symbol LIKE 'sh.609%' OR symbol LIKE 'sz.000%' OR "
+          "symbol LIKE 'sz.001%' OR symbol LIKE 'sz.002%' OR "
+          "symbol LIKE 'sz.003%')",
+    "cyb": "(symbol LIKE 'sz.300%' OR symbol LIKE 'sz.301%')",
+    "kcb": "(symbol LIKE 'sh.688%' OR symbol LIKE 'sh.689%')",
+}
 
 
 DDL = """
-CREATE TABLE IF NOT EXISTS main_board_daily (
+CREATE TABLE IF NOT EXISTS daily (
     symbol         VARCHAR NOT NULL,
     date           DATE NOT NULL,
     open           DOUBLE NOT NULL,
@@ -55,34 +57,7 @@ CREATE TABLE IF NOT EXISTS main_board_daily (
     PRIMARY KEY (symbol, date)
 );
 
-CREATE TABLE IF NOT EXISTS gem_board_daily (
-    symbol         VARCHAR NOT NULL,
-    date           DATE NOT NULL,
-    open           DOUBLE NOT NULL,
-    high           DOUBLE NOT NULL,
-    low            DOUBLE NOT NULL,
-    close          DOUBLE NOT NULL,
-    preclose       DOUBLE NOT NULL,
-    volume         BIGINT NOT NULL,
-    amount         DOUBLE NOT NULL,
-    trade_status   TINYINT NOT NULL,
-    qfq_factor     DOUBLE NOT NULL DEFAULT 1.0,
-    PRIMARY KEY (symbol, date)
-);
-
-CREATE TABLE IF NOT EXISTS main_board_stock_list (
-    symbol                 VARCHAR PRIMARY KEY,
-    name                   VARCHAR NOT NULL,
-    ipo_date               DATE,
-    out_date               DATE,
-    listing_status         VARCHAR NOT NULL,
-    trade_status           TINYINT NOT NULL,
-    first_seen_trade_date  DATE NOT NULL,
-    last_seen_trade_date   DATE NOT NULL,
-    updated_at             TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS gem_board_stock_list (
+CREATE TABLE IF NOT EXISTS stock_list (
     symbol                 VARCHAR PRIMARY KEY,
     name                   VARCHAR NOT NULL,
     ipo_date               DATE,
@@ -236,26 +211,16 @@ class DuckDBManager:
                     ).fetchall()
                 }
                 if existing_tables:
-                    if "meta" not in existing_tables:
+                    required = set(SNAPSHOT_TABLES) | {"initial_import_progress"}
+                    missing = sorted(required - existing_tables)
+                    if missing:
                         raise ConfigurationError(
-                            "数据库已包含表但缺少 meta，拒绝覆盖未知 schema"
-                        )
-                    version_row = connection.execute(
-                        "SELECT value FROM meta WHERE key='schema_version'"
-                    ).fetchone()
-                    if not version_row:
-                        raise ConfigurationError(
-                            "已有数据库缺少 meta.schema_version，拒绝自动迁移"
-                        )
-                    if version_row[0] != SCHEMA_VERSION:
-                        raise ConfigurationError(
-                            f"不支持的数据库 schema_version={version_row[0]!r}，"
-                            f"程序要求 {SCHEMA_VERSION!r}"
+                            f"数据库不是当前结构，缺少表：{missing}"
                         )
                 connection.execute(DDL)
-                self._set_meta(connection, "schema_version", SCHEMA_VERSION)
                 self._set_meta(connection, "price_mode", "raw")
                 self._set_meta(connection, "qfq_algorithm", "preclose_ratio")
+                self._set_meta(connection, "configured_boards", ",".join(self.config.boards))
                 connection.execute("COMMIT")
             except Exception as exc:
                 with contextlib.suppress(Exception):
@@ -298,10 +263,7 @@ class DuckDBManager:
         if not completed:
             return True
         with self.connect(read_only=True) as connection:
-            count = connection.execute(
-                "SELECT (SELECT count(*) FROM main_board_daily) + "
-                "(SELECT count(*) FROM gem_board_daily)"
-            ).fetchone()[0]
+            count = connection.execute("SELECT count(*) FROM daily").fetchone()[0]
         if count == 0:
             raise FatalDataError("initial_import_completed=true，但日线正式表为空")
         return False
@@ -321,29 +283,28 @@ class DuckDBManager:
     def _upsert_stock_list(
         self, connection: duckdb.DuckDBPyConnection, frame: pd.DataFrame, trade_date: date
     ) -> None:
-        for board, table in STOCK_TABLES.items():
-            subset = frame.loc[frame["board"].eq(board), ["symbol", "name", "trade_status"]].copy()
-            if subset.empty:
-                continue
-            with self._registered(connection, subset) as stage:
-                connection.execute(
-                    f"""
-                    INSERT INTO {table} AS target (
-                        symbol, name, ipo_date, out_date, listing_status,
-                        trade_status, first_seen_trade_date, last_seen_trade_date, updated_at
-                    )
-                    SELECT symbol, name, NULL, NULL, 'active', trade_status,
-                           CAST(? AS DATE), CAST(? AS DATE), CURRENT_TIMESTAMP
-                    FROM {stage}
-                    ON CONFLICT(symbol) DO UPDATE SET
-                        name = excluded.name,
-                        listing_status = 'active',
-                        trade_status = excluded.trade_status,
-                        last_seen_trade_date = excluded.last_seen_trade_date,
-                        updated_at = now()
-                    """,
-                    [trade_date, trade_date],
+        subset = frame.loc[:, ["symbol", "name", "trade_status"]].copy()
+        if subset.empty:
+            return
+        with self._registered(connection, subset) as stage:
+            connection.execute(
+                f"""
+                INSERT INTO stock_list AS target (
+                    symbol, name, ipo_date, out_date, listing_status,
+                    trade_status, first_seen_trade_date, last_seen_trade_date, updated_at
                 )
+                SELECT symbol, name, NULL, NULL, 'active', trade_status,
+                       CAST(? AS DATE), CAST(? AS DATE), CURRENT_TIMESTAMP
+                FROM {stage}
+                ON CONFLICT(symbol) DO UPDATE SET
+                    name = excluded.name,
+                    listing_status = 'active',
+                    trade_status = excluded.trade_status,
+                    last_seen_trade_date = excluded.last_seen_trade_date,
+                    updated_at = now()
+                """,
+                [trade_date, trade_date],
+            )
 
     def prepare_initial_import(self, stock_list: pd.DataFrame, target_date: date) -> None:
         with self.connect() as connection:
@@ -381,20 +342,16 @@ class DuckDBManager:
 
     def get_stock_symbols(self) -> set[str]:
         with self.connect(read_only=True) as connection:
-            rows = connection.execute(
-                "SELECT symbol FROM main_board_stock_list "
-                "UNION SELECT symbol FROM gem_board_stock_list"
-            ).fetchall()
+            rows = connection.execute("SELECT symbol FROM stock_list").fetchall()
         return {row[0] for row in rows}
 
     def import_symbol_history(
         self, frame: pd.DataFrame, board: str, target_date: date
     ) -> int:
-        if board not in DAILY_TABLES:
+        if board not in SUPPORTED_BOARDS:
             raise ConfigurationError(f"未知板块：{board}")
         adjusted, events = calculate_qfq_factors(frame, self.config.factor_epsilon)
         symbol = str(adjusted.iloc[0]["symbol"])
-        table = DAILY_TABLES[board]
         daily_columns = [
             "symbol",
             "date",
@@ -421,12 +378,12 @@ class DuckDBManager:
                 if completed:
                     connection.execute("ROLLBACK")
                     return 0
-                connection.execute(f"DELETE FROM {table} WHERE symbol=?", [symbol])
+                connection.execute("DELETE FROM daily WHERE symbol=?", [symbol])
                 connection.execute("DELETE FROM adjustment_events WHERE symbol=?", [symbol])
                 with self._registered(connection, adjusted[daily_columns]) as stage:
                     connection.execute(
                         f"""
-                        INSERT INTO {table}({', '.join(daily_columns)})
+                        INSERT INTO daily({', '.join(daily_columns)})
                         SELECT {', '.join(daily_columns)} FROM {stage}
                         """
                     )
@@ -475,23 +432,21 @@ class DuckDBManager:
             raise FatalDataError("新增股票回补必须且只能提供一条证券信息")
         symbol = str(stock.iloc[0]["symbol"])
         board = str(stock.iloc[0]["board"])
-        if board not in DAILY_TABLES:
+        if board not in SUPPORTED_BOARDS:
             raise ConfigurationError(f"未知板块：{board}")
         adjusted, events = calculate_qfq_factors(frame, self.config.factor_epsilon)
         if not adjusted["symbol"].eq(symbol).all():
             raise FatalDataError(f"新增股票 {symbol} 的证券信息与历史行情代码不一致")
-        table = DAILY_TABLES[board]
         daily_columns = [
             "symbol", "date", "open", "high", "low", "close", "preclose",
             "volume", "amount", "trade_status", "qfq_factor",
         ]
-        connection.execute("DELETE FROM main_board_daily WHERE symbol=?", [symbol])
-        connection.execute("DELETE FROM gem_board_daily WHERE symbol=?", [symbol])
+        connection.execute("DELETE FROM daily WHERE symbol=?", [symbol])
         connection.execute("DELETE FROM adjustment_events WHERE symbol=?", [symbol])
         self._upsert_stock_list(connection, stock, target_date)
         with self._registered(connection, adjusted[daily_columns]) as stage:
             connection.execute(
-                f"INSERT INTO {table}({', '.join(daily_columns)}) "
+                f"INSERT INTO daily({', '.join(daily_columns)}) "
                 f"SELECT {', '.join(daily_columns)} FROM {stage}"
             )
         if not events.empty:
@@ -544,14 +499,11 @@ class DuckDBManager:
         return connection.execute(
             """
             SELECT symbol, arg_max(close, date) AS previous_close
-            FROM (
-                SELECT symbol, date, close FROM main_board_daily WHERE date < ?
-                UNION ALL
-                SELECT symbol, date, close FROM gem_board_daily WHERE date < ?
-            ) history
+            FROM daily
+            WHERE date < ?
             GROUP BY symbol
             """,
-            [trade_date, trade_date],
+            [trade_date],
         ).fetchdf()
 
     def _existing_daily_symbols(
@@ -563,14 +515,10 @@ class DuckDBManager:
         existing = connection.execute(
             """
             SELECT symbol, date, open, high, low, close, preclose, volume, amount,
-                   trade_status, 'main' AS board
-            FROM main_board_daily WHERE date=?
-            UNION ALL
-            SELECT symbol, date, open, high, low, close, preclose, volume, amount,
-                   trade_status, 'gem' AS board
-            FROM gem_board_daily WHERE date=?
+                   trade_status
+            FROM daily WHERE date=?
             """,
-            [trade_date, trade_date],
+            [trade_date],
         ).fetchdf()
         expected_symbols = set(daily["symbol"])
         existing = existing.loc[existing["symbol"].isin(expected_symbols)].copy()
@@ -591,7 +539,7 @@ class DuckDBManager:
                     raise FatalDataError(
                         f"{row.symbol} {trade_date} 已回补日线的 {column} 与全市场日线不一致"
                     )
-            for column in ("volume", "trade_status", "board"):
+            for column in ("volume", "trade_status"):
                 if getattr(row, column) != source[column]:
                     raise FatalDataError(
                         f"{row.symbol} {trade_date} 已回补日线的 {column} 与全市场日线不一致"
@@ -662,7 +610,6 @@ class DuckDBManager:
                     events.append(
                         {
                             "symbol": row.symbol,
-                            "board": row.board,
                             "previous_close": float(previous_close),
                             "preclose": float(row.preclose),
                             "event_factor": ratio,
@@ -670,9 +617,8 @@ class DuckDBManager:
                     )
 
                 for event in events:
-                    table = DAILY_TABLES[event["board"]]
                     connection.execute(
-                        f"UPDATE {table} SET qfq_factor=qfq_factor*? "
+                        "UPDATE daily SET qfq_factor=qfq_factor*? "
                         "WHERE symbol=? AND date<?",
                         [event["event_factor"], event["symbol"], trade_date],
                     )
@@ -704,28 +650,26 @@ class DuckDBManager:
                     "trade_status",
                     "qfq_factor",
                 ]
-                for board, table in DAILY_TABLES.items():
-                    subset = pending.loc[
-                        pending["board"].eq(board),
-                        [
-                            "symbol",
-                            "date",
-                            "open",
-                            "high",
-                            "low",
-                            "close",
-                            "preclose",
-                            "volume",
-                            "amount",
-                            "trade_status",
-                        ],
-                    ].copy()
-                    if subset.empty:
-                        continue
+                subset = pending.loc[
+                    :,
+                    [
+                        "symbol",
+                        "date",
+                        "open",
+                        "high",
+                        "low",
+                        "close",
+                        "preclose",
+                        "volume",
+                        "amount",
+                        "trade_status",
+                    ],
+                ].copy()
+                if not subset.empty:
                     subset["qfq_factor"] = 1.0
                     with self._registered(connection, subset[insert_columns]) as stage:
                         connection.execute(
-                            f"INSERT INTO {table}({', '.join(insert_columns)}) "
+                            f"INSERT INTO daily({', '.join(insert_columns)}) "
                             f"SELECT {', '.join(insert_columns)} FROM {stage}"
                         )
 
@@ -740,9 +684,7 @@ class DuckDBManager:
                 continuity = connection.execute(
                     """
                     WITH history AS (
-                        SELECT symbol, date, close, preclose, qfq_factor FROM main_board_daily
-                        UNION ALL
-                        SELECT symbol, date, close, preclose, qfq_factor FROM gem_board_daily
+                        SELECT symbol, date, close, preclose, qfq_factor FROM daily
                     ), latest AS (
                         SELECT symbol, arg_max(close*qfq_factor, date) AS adjusted_previous
                         FROM history WHERE date < ? GROUP BY symbol
@@ -780,11 +722,20 @@ class DuckDBManager:
 
         memory: duckdb.DuckDBPyConnection | None = None
         try:
+            board_filter = " OR ".join(BOARD_SQL[board] for board in self.config.boards)
             with self.connect(read_only=True) as source:
-                tables = {
-                    name: source.execute(f"SELECT * FROM {name}").to_arrow_table()
-                    for name in SNAPSHOT_TABLES
-                }
+                daily = source.execute(
+                    f"SELECT * FROM daily WHERE {board_filter}"
+                ).to_arrow_table()
+                stocks = source.execute(
+                    f"SELECT * FROM stock_list WHERE {board_filter}"
+                ).to_arrow_table()
+                version_row = source.execute(
+                    "SELECT value FROM meta WHERE key='last_update_trade_date'"
+                ).fetchone()
+                version = None if version_row is None else version_row[0]
+            if not version:
+                raise FatalDataError("内存快照缺少 last_update_trade_date")
             memory = duckdb.connect(
                 ":memory:",
                 config={
@@ -792,62 +743,35 @@ class DuckDBManager:
                     "enable_external_access": "false",
                 },
             )
-            for name, table in tables.items():
-                stage = f"source_{name}"
-                memory.register(stage, table)
-                if name in DAILY_TABLES.values():
-                    storage = f"_{name}_snapshot"
-                    memory.execute(
-                        f"""
-                        CREATE TABLE {storage} AS
-                        SELECT *,
-                               open*qfq_factor AS _qfq_open,
-                               high*qfq_factor AS _qfq_high,
-                               low*qfq_factor AS _qfq_low,
-                               close*qfq_factor AS _qfq_close
-                        FROM {stage}
-                        """
-                    )
-                    memory.execute(
-                        f"CREATE VIEW {name} AS "
-                        f"SELECT {DAILY_SNAPSHOT_COLUMNS} FROM {storage}"
-                    )
-                else:
-                    memory.execute(f"CREATE TABLE {name} AS SELECT * FROM {stage}")
-                memory.unregister(stage)
+            memory.register("source_daily", daily)
             memory.execute(
                 """
-                CREATE VIEW main_board_daily_qfq AS
+                CREATE TABLE daily_qfq AS
                 SELECT symbol, date,
-                       _qfq_open AS open, _qfq_high AS high,
-                       _qfq_low AS low, _qfq_close AS close,
+                       open*qfq_factor AS open,
+                       high*qfq_factor AS high,
+                       low*qfq_factor AS low,
+                       close*qfq_factor AS close,
+                       (close/preclose-1.0)*100.0 AS pct_chg,
                        volume, amount, trade_status
-                FROM _main_board_daily_snapshot
+                FROM source_daily
                 """
             )
-            memory.execute(
-                """
-                CREATE VIEW gem_board_daily_qfq AS
-                SELECT symbol, date,
-                       _qfq_open AS open, _qfq_high AS high,
-                       _qfq_low AS low, _qfq_close AS close,
-                       volume, amount, trade_status
-                FROM _gem_board_daily_snapshot
-                """
-            )
-            meta_rows = memory.execute("SELECT key, value FROM meta").fetchall()
-            meta = dict(meta_rows)
-            version = meta.get("last_update_trade_date")
-            if not version:
-                raise FatalDataError("内存快照缺少 last_update_trade_date")
-            maximum = memory.execute(
-                """
-                SELECT max(date) FROM (
-                    SELECT date FROM main_board_daily
-                    UNION ALL SELECT date FROM gem_board_daily
+            memory.unregister("source_daily")
+            memory.register("source_stock_list", stocks)
+            memory.execute("CREATE TABLE stock_list AS SELECT * FROM source_stock_list")
+            memory.unregister("source_stock_list")
+            for board in self.config.boards:
+                predicate = BOARD_SQL[board]
+                memory.execute(
+                    f"CREATE VIEW {board}_daily_qfq AS "
+                    f"SELECT * FROM daily_qfq WHERE {predicate}"
                 )
-                """
-            ).fetchone()[0]
+                memory.execute(
+                    f"CREATE VIEW {board}_stock_list AS "
+                    f"SELECT * FROM stock_list WHERE {predicate}"
+                )
+            maximum = memory.execute("SELECT max(date) FROM daily_qfq").fetchone()[0]
             if maximum != date.fromisoformat(version):
                 raise FatalDataError(f"快照最大日期 {maximum} 与 meta {version} 不一致")
             return MemorySnapshot(memory, version, self.config.query_max_rows)
@@ -878,10 +802,7 @@ class DuckDBManager:
 
                 invalid = connection.execute(
                     """
-                    SELECT count(*) FROM (
-                        SELECT * FROM main_board_daily
-                        UNION ALL SELECT * FROM gem_board_daily
-                    ) d
+                    SELECT count(*) FROM daily d
                     WHERE symbol IS NULL OR date IS NULL OR open<=0 OR high<=0 OR low<=0
                        OR close<=0 OR preclose<=0 OR volume<0 OR amount<0
                        OR qfq_factor<=0 OR trade_status NOT IN (0,1)
@@ -898,11 +819,7 @@ class DuckDBManager:
                     WITH history AS (
                         SELECT symbol, date, close*qfq_factor AS adjusted_close,
                                preclose*qfq_factor AS adjusted_preclose
-                        FROM main_board_daily
-                        UNION ALL
-                        SELECT symbol, date, close*qfq_factor AS adjusted_close,
-                               preclose*qfq_factor AS adjusted_preclose
-                        FROM gem_board_daily
+                        FROM daily
                     ), linked AS (
                         SELECT *, lag(adjusted_close) OVER(PARTITION BY symbol ORDER BY date) AS prior
                         FROM history
@@ -924,14 +841,7 @@ class DuckDBManager:
                 initial_completed = bool(
                     initial_completed_row and initial_completed_row[0] == "true"
                 )
-                maximum = connection.execute(
-                    """
-                    SELECT max(date) FROM (
-                        SELECT date FROM main_board_daily
-                        UNION ALL SELECT date FROM gem_board_daily
-                    )
-                    """
-                ).fetchone()[0]
+                maximum = connection.execute("SELECT max(date) FROM daily").fetchone()[0]
                 if initial_completed:
                     last_update_row = connection.execute(
                         "SELECT value FROM meta WHERE key='last_update_trade_date'"
@@ -949,8 +859,7 @@ class DuckDBManager:
                         "SELECT count(*) FROM initial_import_progress WHERE status='completed'"
                     ).fetchone()[0]
                 report["row_count"] = connection.execute(
-                    "SELECT (SELECT count(*) FROM main_board_daily) + "
-                    "(SELECT count(*) FROM gem_board_daily)"
+                    "SELECT count(*) FROM daily"
                 ).fetchone()[0]
         except FatalDataError:
             raise
@@ -964,6 +873,5 @@ class DuckDBManager:
             "database_path": str(self.path),
             "last_update_trade_date": self.get_meta("last_update_trade_date"),
             "initial_import_completed": self.get_meta("initial_import_completed"),
-            "schema_version": self.get_meta("schema_version"),
         }
         return json.dumps(payload, ensure_ascii=False)

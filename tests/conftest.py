@@ -14,6 +14,7 @@ def app_config(tmp_path: Path) -> AppConfig:
         "\n".join(
             [
                 'database_path: "data/test.duckdb"',
+                "boards: [zb, cyb]",
                 'start_date: "2018-01-01"',
                 'update_time: "18:30"',
                 'timezone: "Asia/Shanghai"',

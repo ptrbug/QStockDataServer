@@ -22,14 +22,14 @@ def _daily(trade_date: date) -> pd.DataFrame:
                 "high": 10.0, "low": 10.0, "close": 10.0, "preclose": 10.0,
                 "volume": 100, "amount": 1000.0, "adjustflag": 3,
                 "trade_status": 1, "turn": 1.0, "pct_chg": 0.0,
-                "is_st": 0, "board": "main",
+                "is_st": 0, "board": "zb",
             },
             {
                 "symbol": "sz.300001", "date": trade_date, "open": 20.0,
                 "high": 20.0, "low": 20.0, "close": 20.0, "preclose": 20.0,
                 "volume": 100, "amount": 2000.0, "adjustflag": 3,
                 "trade_status": 1, "turn": 1.0, "pct_chg": 0.0,
-                "is_st": 0, "board": "gem",
+                "is_st": 0, "board": "cyb",
             },
         ]
     )
@@ -53,8 +53,8 @@ class FakeFetcher:
         self.stock_list_dates.append(trade_date)
         return pd.DataFrame(
             [
-                {"symbol": "sh.600000", "name": "浦发银行", "trade_status": 1, "board": "main"},
-                {"symbol": "sz.300001", "name": "新增股票", "trade_status": 1, "board": "gem"},
+                {"symbol": "sh.600000", "name": "浦发银行", "trade_status": 1, "board": "zb"},
+                {"symbol": "sz.300001", "name": "新增股票", "trade_status": 1, "board": "cyb"},
             ]
         )
 

@@ -1,6 +1,6 @@
 # QStockDataServer
 
-QStockDataServer 是一个面向 A 股主板、创业板的本地日线行情服务。它只保存 BaoStock 返回的**不复权**行情，利用 `preclose` 在本地确定性计算前复权因子，并通过 DuckDB 内存快照和 Arrow Flight 向策略程序提供只读 SQL 查询。
+QStockDataServer 是一个面向 A 股主板、创业板、科创板的可配置本地日线行情服务。它只在磁盘保存 BaoStock 返回的**不复权**行情，利用 `preclose` 在本地确定性计算前复权因子，并通过 DuckDB 内存快照和 Arrow Flight 向策略程序提供只读 SQL 查询。默认启用主板和创业板。
 
 项目采用 fail-closed 策略：日期、字段、代码集合、交易状态、价格、复权口径或连续性只要有一项无法验证，本次事务就会回滚；数据完整性错误会留下致命标记并停止服务，未验证的数据不会进入正式表。
 
@@ -9,10 +9,10 @@ QStockDataServer 是一个面向 A 股主板、创业板的本地日线行情服
 ## 数据流程
 
 - 首次导入：先用 `query_all_stock(day)` 获取目标证券集合，再逐只调用 `query_history_k_data_plus(..., frequency="d", adjustflag="3")`，默认从 2018-01-01 开始。
-- 增量更新：只对最新目标交易日调用一次 `query_all_stock(day)` 更新证券列表；然后按缺失交易日逐日调用 `query_daily_history_k_AStock(date)` 获取日 K。即使一年未更新，也只需调用一次证券列表接口和约 240 次全市场日线接口。
+- 增量更新：只对最新目标交易日调用一次 `query_all_stock(day)` 更新证券列表；然后按缺失交易日逐日调用一次 `query_daily_history_k_AStock(date)` 获取全市场日 K。该接口包含主板、创业板和科创板，程序再按 `boards` 过滤，因此启用更多板块不会增加每日全市场接口的调用次数。即使一年未更新，也只需调用一次证券列表接口和约 240 次全市场日线接口。
 - 新增股票：将最新证券列表与本地列表比较，每只新增股票调用一次 `query_history_k_data_plus(..., frequency="d", adjustflag="3")` 回补完整历史。历史回补、最新证券列表和目标日日 K 在同一事务提交；目标日逐字段不一致会整体回滚。
-- 正式存储：`main_board_daily`、`gem_board_daily` 保存不复权 OHLC、`preclose`、成交量、成交额及 `qfq_factor`。
-- 查询：原始表返回不复权价格；内存快照构建时一次性预计算前复权 OHLC，`main_board_daily_qfq`、`gem_board_daily_qfq` 只投影预计算列，不在每次查询时重复乘因子。前复权视图不包含 `preclose`。
+- 正式存储：磁盘表 `daily` 保存所有已启用板块的不复权 OHLC、`preclose`、成交量、成交额及 `qfq_factor`；`stock_list` 保存统一证券列表。
+- 查询：内存表 `daily_qfq` 保存所有已启用板块的前复权行情；默认同时提供 `zb_daily_qfq`、`cyb_daily_qfq`、`zb_stock_list`、`cyb_stock_list`。启用 `kcb` 后还会提供 `kcb_daily_qfq` 和 `kcb_stock_list`。行情查询对象不包含 `preclose`，`pct_chg` 在构建快照时按 `(close/preclose-1)*100` 计算。
 
 BaoStock 的接口实际会把部分停牌证券的 `volume`、`amount` 返回为空，个别历史停牌日还会在 `amount=0` 时残留上一交易日的非零 `volume`。程序仅在 `tradestatus=0`、OHLC 相等且成交额为 0 时把停牌成交量规范化为 0，随后仍强制检查停牌 OHLC 相等且量额为 0；正常交易证券出现空量额，或停牌日存在非零成交额/不同价格，都会立即中止。
 
@@ -23,6 +23,33 @@ F[i-1] = F[i] * preclose[i] / close[i-1]
 ```
 
 新增除权除息日时，只调整该股票的历史因子，不重写原始行情。调整事件同时写入 `adjustment_events`，并验证相邻日的复权收盘价与复权 `preclose` 连续。
+
+## 数据库与查询对象
+
+磁盘 DuckDB 使用统一表，不按板块拆分：
+
+| 对象 | 用途 |
+| ---- | ---- |
+| `daily` | 所有已采集板块的不复权日线和前复权因子 |
+| `stock_list` | 所有已采集板块的证券列表 |
+| `adjustment_events` | 除权除息事件 |
+| `initial_import_progress` | 首次导入断点 |
+| `meta` | 最近更新日期等运行状态 |
+
+Arrow Flight 只开放内存快照中的查询对象。默认 `boards: [zb, cyb]` 时共有以下 6 个：
+
+```text
+daily_qfq
+zb_daily_qfq
+cyb_daily_qfq
+stock_list
+zb_stock_list
+cyb_stock_list
+```
+
+行情对象的列为 `symbol`、`date`、`open`、`high`、`low`、`close`、`pct_chg`、`volume`、`amount`、`trade_status`。其中 OHLC 已前复权，`pct_chg` 由磁盘行情的 `close/preclose` 计算；不对外提供 `preclose` 和 `qfq_factor`。
+
+将配置改为 `boards: [zb, cyb, kcb]` 后，统一对象 `daily_qfq` 和 `stock_list` 会包含科创板，并增加 `kcb_daily_qfq`、`kcb_stock_list` 两个分板块查询对象。每日仍只调用一次 `query_daily_history_k_AStock(date)`。
 
 ## 安装
 
@@ -46,9 +73,22 @@ python3 -m venv .venv
 
 默认配置位于 `config.yaml`。相对路径都按配置文件所在目录解析，因此开机启动时不会把数据库或日志写入错误目录。
 
+默认获取主板和创业板：
+
+```yaml
+boards: [zb, cyb]
+```
+
+需要同时获取科创板时改为：
+
+```yaml
+boards: [zb, cyb, kcb]
+```
+
 | 配置项                 | 默认值                            | 说明                                           |
 | ---------------------- | --------------------------------- | ---------------------------------------------- |
 | `database_path`        | `data/stock_daily.duckdb`         | 磁盘 DuckDB                                    |
+| `boards`               | `[zb, cyb]`                       | 启用板块；可选 `zb`、`cyb`、`kcb`              |
 | `start_date`           | `2018-01-01`                      | 首次导入起始日                                 |
 | `update_time`          | `18:30`                           | 每日调度时间                                   |
 | `timezone`             | `Asia/Shanghai`                   | 调度时区                                       |
@@ -87,24 +127,33 @@ Linux：
 
 ## 客户端查询
 
+默认 `boards: [zb, cyb]` 支持查询以下对象：
+
+| 查询对象 | 内容 |
+| -------- | ---- |
+| `daily_qfq` | 主板和创业板全部前复权日线 |
+| `zb_daily_qfq` | 主板前复权日线 |
+| `cyb_daily_qfq` | 创业板前复权日线 |
+| `stock_list` | 主板和创业板全部证券列表 |
+| `zb_stock_list` | 主板证券列表 |
+| `cyb_stock_list` | 创业板证券列表 |
+
+配置包含 `kcb` 时，`daily_qfq`、`stock_list` 会自动包含科创板，同时增加 `kcb_daily_qfq` 和 `kcb_stock_list`。
+
+例如查询贵州茅台的全部前复权日线：
+
 ```python
 from client import StockDataClient
 
 with StockDataClient() as client:
-    raw = client.query("""
-        SELECT date, open, high, low, close, preclose
-        FROM main_board_daily
+    data = client.query("""
+        SELECT date, open, high, low, close, pct_chg
+        FROM daily_qfq
         WHERE symbol = 'sh.600519'
         ORDER BY date
     """)
 
-    qfq = client.query("""
-        SELECT date, open, high, low, close
-        FROM main_board_daily_qfq
-        WHERE symbol = 'sh.600519'
-        ORDER BY date
-    """)
-
+    print(data)
     print(client.status())
 ```
 

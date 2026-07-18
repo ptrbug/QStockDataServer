@@ -11,6 +11,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from exceptions import ConfigurationError
 
 
+SUPPORTED_BOARDS = ("zb", "cyb", "kcb")
+
+
 def _parse_date(value: Any, key: str) -> date:
     try:
         return date.fromisoformat(str(value))
@@ -49,6 +52,7 @@ def _resolve(base_dir: Path, value: Any, key: str) -> Path:
 class AppConfig:
     config_path: Path
     database_path: Path
+    boards: tuple[str, ...]
     start_date: date
     update_time: time
     timezone: ZoneInfo
@@ -79,6 +83,7 @@ class AppConfig:
 
 DEFAULTS: dict[str, Any] = {
     "database_path": "data/stock_daily.duckdb",
+    "boards": ["zb", "cyb"],
     "start_date": "2018-01-01",
     "update_time": "18:30",
     "timezone": "Asia/Shanghai",
@@ -153,9 +158,24 @@ def load_config(path: str | Path) -> AppConfig:
         for value in raw_delays
     )
 
+    raw_boards = values["boards"]
+    if not isinstance(raw_boards, list) or not raw_boards:
+        raise ConfigurationError("boards 必须是非空列表")
+    boards = tuple(str(value).strip().lower() for value in raw_boards)
+    if any(not value for value in boards):
+        raise ConfigurationError("boards 不能包含空值")
+    if len(set(boards)) != len(boards):
+        raise ConfigurationError("boards 不能包含重复项")
+    unsupported = sorted(set(boards) - set(SUPPORTED_BOARDS))
+    if unsupported:
+        raise ConfigurationError(
+            f"boards 包含不支持的板块：{unsupported}；可选值为 {list(SUPPORTED_BOARDS)}"
+        )
+
     return AppConfig(
         config_path=config_path,
         database_path=_resolve(base_dir, values["database_path"], "database_path"),
+        boards=boards,
         start_date=_parse_date(values["start_date"], "start_date"),
         update_time=_parse_time(values["update_time"], "update_time"),
         timezone=timezone,

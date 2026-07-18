@@ -16,7 +16,7 @@ def test_read_only_sql_guard() -> None:
     try:
         assert guard.validate("WITH x AS (SELECT 1 AS a) SELECT * FROM x")
         for sql in (
-            "DELETE FROM main_board_daily",
+            "DELETE FROM daily_qfq",
             "SELECT 1; SELECT 2",
             "SELECT * FROM read_csv('secret.csv')",
         ):

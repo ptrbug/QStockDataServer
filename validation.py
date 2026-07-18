@@ -29,6 +29,7 @@ DAILY_COLUMNS = {
 }
 STOCK_COLUMNS = {"symbol", "name", "trade_status", "board"}
 SYMBOL_RE = re.compile(r"^(?:sh|sz)\.\d{6}$")
+SUPPORTED_BOARDS = {"zb", "cyb", "kcb"}
 
 
 def _missing_columns(frame: pd.DataFrame, required: Iterable[str]) -> list[str]:
@@ -55,7 +56,7 @@ def validate_stock_list(frame: pd.DataFrame, requested_date: date) -> None:
         raise FatalDataError("证券列表存在空名称")
     if not frame["trade_status"].isin([0, 1]).all():
         raise FatalDataError("证券列表 trade_status 必须是 0 或 1")
-    if not frame["board"].isin(["main", "gem"]).all():
+    if not frame["board"].isin(SUPPORTED_BOARDS).all():
         raise FatalDataError("证券列表包含无法识别的目标板块")
 
 
@@ -87,7 +88,7 @@ def validate_daily_frame(
         )
     if not frame["trade_status"].isin([0, 1]).all():
         raise FatalDataError("日线 trade_status 必须是 0 或 1")
-    if not frame["board"].isin(["main", "gem"]).all():
+    if not frame["board"].isin(SUPPORTED_BOARDS).all():
         raise FatalDataError("日线包含无法识别的目标板块")
 
     price_columns = ["open", "high", "low", "close", "preclose"]

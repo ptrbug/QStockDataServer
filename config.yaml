@@ -1,4 +1,5 @@
 database_path: "data/stock_daily.duckdb"
+boards: [zb, cyb]
 start_date: "2018-01-01"
 update_time: "18:30"
 timezone: "Asia/Shanghai"

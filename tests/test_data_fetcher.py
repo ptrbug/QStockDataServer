@@ -71,10 +71,11 @@ class FakeBS:
 
 
 def test_board_classification() -> None:
-    assert classify_board("sh.600000") == "main"
-    assert classify_board("sz.002001") == "main"
-    assert classify_board("sz.301001") == "gem"
-    assert classify_board("sh.688001") is None
+    assert classify_board("sh.600000") == "zb"
+    assert classify_board("sz.002001") == "zb"
+    assert classify_board("sz.301001") == "cyb"
+    assert classify_board("sh.688001") == "kcb"
+    assert classify_board("sh.689009") == "kcb"
     assert classify_board("sh.000001") is None
 
 
@@ -85,6 +86,17 @@ def test_daily_and_stock_list_are_filtered_and_typed(app_config) -> None:
     assert stocks["symbol"].tolist() == ["sh.600000", "sz.300001"]
     assert daily["symbol"].tolist() == ["sh.600000", "sz.300001"]
     assert daily.loc[daily["symbol"].eq("sz.300001"), "volume"].item() == 0
+
+
+def test_kcb_is_included_when_configured(app_config) -> None:
+    config = replace(app_config, boards=("zb", "cyb", "kcb"))
+    fetcher = BaostockDataFetcher(config, FakeBS())
+
+    stocks = fetcher.fetch_stock_list(date(2024, 1, 2))
+    daily = fetcher.fetch_market_daily(date(2024, 1, 2))
+
+    assert "sh.688001" in set(stocks["symbol"])
+    assert "sh.688001" in set(daily["symbol"])
 
 
 def test_wrong_adjustflag_is_fatal(app_config) -> None:
