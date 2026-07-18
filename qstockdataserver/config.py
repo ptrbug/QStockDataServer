@@ -183,7 +183,7 @@ def _load_strategy_programs(path: Path) -> StrategyProgramsConfig:
     except (OSError, yaml.YAMLError) as exc:
         raise ConfigurationError(f"无法读取策略配置文件 {path}: {exc}") from exc
     if not isinstance(loaded, dict):
-        raise ConfigurationError("strategy.yaml 顶层必须是 key/value 映射")
+        raise ConfigurationError("strategies.yaml 顶层必须是 key/value 映射")
     return _parse_strategy_programs(path.parent, loaded.get("strategy_programs"))
 
 
@@ -205,7 +205,7 @@ def load_config(path: str | Path) -> AppConfig:
 
     values = {**DEFAULTS, **loaded}
     base_dir = config_path.parent
-    strategy_config_path = base_dir / "strategy.yaml"
+    strategy_config_path = base_dir / "strategies.yaml"
     strategy_programs = _load_strategy_programs(strategy_config_path)
     try:
         timezone = ZoneInfo(str(values["timezone"]))

@@ -76,7 +76,7 @@ def test_strategy_launcher_disabled_does_not_start_process(monkeypatch) -> None:
 
 def test_strategy_programs_config_is_loaded_from_yaml(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
-    strategy_path = tmp_path / "strategy.yaml"
+    strategy_path = tmp_path / "strategies.yaml"
     config_path.write_text("", encoding="utf-8")
     strategy_path.write_text(
         "\n".join(
@@ -107,7 +107,7 @@ def test_strategy_programs_config_is_loaded_from_yaml(tmp_path: Path) -> None:
 
 def test_strategy_programs_enabled_must_be_boolean(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
-    strategy_path = tmp_path / "strategy.yaml"
+    strategy_path = tmp_path / "strategies.yaml"
     config_path.write_text("", encoding="utf-8")
     strategy_path.write_text(
         "\n".join(["strategy_programs:", '  enabled: "false"', "  items: []"]),
@@ -118,12 +118,12 @@ def test_strategy_programs_enabled_must_be_boolean(tmp_path: Path) -> None:
         load_config(config_path)
 
 
-def test_missing_strategy_yaml_disables_strategy_programs(tmp_path: Path) -> None:
+def test_missing_strategies_yaml_disables_strategy_programs(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text("", encoding="utf-8")
 
     config = load_config(config_path)
 
-    assert config.strategy_config_path == tmp_path / "strategy.yaml"
+    assert config.strategy_config_path == tmp_path / "strategies.yaml"
     assert config.strategy_programs.enabled is False
     assert config.strategy_programs.items == ()
