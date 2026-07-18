@@ -5,8 +5,8 @@ from datetime import date
 
 import pytest
 
-from data_fetcher import BaostockDataFetcher, classify_board
-from exceptions import FatalDataError
+from qstockdataserver.data_fetcher import BaostockDataFetcher, classify_board
+from qstockdataserver.exceptions import FatalDataError
 
 
 class Response:

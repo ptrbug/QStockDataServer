@@ -4,11 +4,11 @@ import threading
 
 import duckdb
 
-from client import StockDataClient, StockDataClientError
-from db_manager import MemorySnapshot, SnapshotManager
-from exceptions import FatalDataError
-from flight_server import ReadOnlySQLGuard, StockFlightServer
-from logging_config import FatalMarkerManager
+from qstockdataserver.client import StockDataClient, StockDataClientError
+from qstockdataserver.db_manager import MemorySnapshot, SnapshotManager
+from qstockdataserver.exceptions import FatalDataError
+from qstockdataserver.flight_server import ReadOnlySQLGuard, StockFlightServer
+from qstockdataserver.logging_config import FatalMarkerManager
 
 
 def test_read_only_sql_guard() -> None:

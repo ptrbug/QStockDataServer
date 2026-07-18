@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from exceptions import ConfigurationError
+from .exceptions import ConfigurationError
 
 
 SUPPORTED_BOARDS = ("zb", "cyb", "kcb")

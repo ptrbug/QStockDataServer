@@ -16,9 +16,9 @@ from typing import Any, Iterator
 import duckdb
 import pandas as pd
 
-from config import AppConfig, SUPPORTED_BOARDS
-from exceptions import ConfigurationError, FatalDataError, StorageError
-from validation import calculate_qfq_factors
+from .config import AppConfig, SUPPORTED_BOARDS
+from .exceptions import ConfigurationError, FatalDataError, StorageError
+from .validation import calculate_qfq_factors
 
 
 LOGGER = logging.getLogger(__name__)

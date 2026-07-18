@@ -7,9 +7,13 @@ import duckdb
 import pandas as pd
 import pytest
 
-from db_manager import DuckDBManager
-from exceptions import ConfigurationError, FatalDataError
-from validation import validate_daily_frame, validate_daily_pair, validate_stock_list
+from qstockdataserver.db_manager import DuckDBManager
+from qstockdataserver.exceptions import ConfigurationError, FatalDataError
+from qstockdataserver.validation import (
+    validate_daily_frame,
+    validate_daily_pair,
+    validate_stock_list,
+)
 
 
 def make_daily(symbol: str, board: str, rows: list[tuple]) -> pd.DataFrame:

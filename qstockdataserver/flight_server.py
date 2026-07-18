@@ -11,8 +11,8 @@ from typing import Any
 
 import duckdb
 
-from db_manager import SnapshotManager
-from exceptions import ConfigurationError, StorageError
+from .db_manager import SnapshotManager
+from .exceptions import ConfigurationError, StorageError
 
 
 LOGGER = logging.getLogger(__name__)

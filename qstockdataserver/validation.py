@@ -10,7 +10,7 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 
-from exceptions import FatalDataError
+from .exceptions import FatalDataError
 
 
 DAILY_COLUMNS = {

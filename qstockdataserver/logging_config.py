@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from config import AppConfig
+from .config import AppConfig
 
 
 _run_id = contextvars.ContextVar("run_id", default="-")

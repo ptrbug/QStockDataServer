@@ -1,0 +1,1 @@
+"""QStockDataServer application package."""

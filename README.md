@@ -6,6 +6,20 @@ QStockDataServer 是一个面向 A 股主板、创业板、科创板的可配置
 
 > “绝对可靠”不能由单一上游数据源从业务事实层面证明。本项目保证的是：BaoStock 返回值必须通过本地结构、一致性和连续性校验，写入必须是原子事务；任何无法确认的数据都会被拒绝，不会静默接受。
 
+## 源码结构
+
+```text
+QStockDataServer/
+├─ qstockdataserver/      # 配置、数据获取、存储、Flight、客户端和服务逻辑
+├─ tests/                 # 自动化测试
+├─ deploy/                # Windows/Linux 部署脚本
+├─ server.py              # 唯一命令行启动入口
+├─ config.yaml            # 默认运行配置
+└─ README.md
+```
+
+源码运行统一使用 `python server.py <command>`，不需要安装本地包，也不提供 `python -m qstockdataserver` 入口。
+
 ## 数据流程
 
 - 首次导入：先用 `query_all_stock(day)` 获取目标证券集合，再逐只调用 `query_history_k_data_plus(..., frequency="d", adjustflag="3")`，默认从 2018-01-01 开始。
@@ -143,7 +157,7 @@ Linux：
 例如查询贵州茅台的全部前复权日线：
 
 ```python
-from client import StockDataClient
+from qstockdataserver.client import StockDataClient
 
 with StockDataClient() as client:
     data = client.query("""
@@ -162,7 +176,7 @@ with StockDataClient() as client:
 手动触发补数：
 
 ```python
-from client import StockDataClient
+from qstockdataserver.client import StockDataClient
 
 with StockDataClient() as client:
     accepted = client.trigger_update()

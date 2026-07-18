@@ -11,14 +11,14 @@ from typing import Any, TypeVar
 
 import pandas as pd
 
-from config import AppConfig, SUPPORTED_BOARDS
-from exceptions import (
+from .config import AppConfig, SUPPORTED_BOARDS
+from .exceptions import (
     ConfigurationError,
     FatalDataError,
     TemporarySourceAttemptError,
     TransientSourceError,
 )
-from validation import validate_daily_frame, validate_stock_list
+from .validation import validate_daily_frame, validate_stock_list
 
 
 LOGGER = logging.getLogger(__name__)

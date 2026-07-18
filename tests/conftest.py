@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from config import AppConfig, load_config
+from qstockdataserver.config import AppConfig, load_config
 
 
 @pytest.fixture
