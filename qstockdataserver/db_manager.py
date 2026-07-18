@@ -748,10 +748,10 @@ class DuckDBManager:
                 """
                 CREATE TABLE daily_qfq AS
                 SELECT symbol, date,
-                       open*qfq_factor AS open,
-                       high*qfq_factor AS high,
-                       low*qfq_factor AS low,
-                       close*qfq_factor AS close,
+                       round(open*qfq_factor, 2) AS open,
+                       round(high*qfq_factor, 2) AS high,
+                       round(low*qfq_factor, 2) AS low,
+                       round(close*qfq_factor, 2) AS close,
                        round((close/preclose-1.0)*100.0, 2) AS pct_chg,
                        volume, amount, trade_status
                 FROM source_daily
