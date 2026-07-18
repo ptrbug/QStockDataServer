@@ -213,7 +213,7 @@ def test_kcb_query_objects_are_created_when_enabled(app_config) -> None:
     history = make_daily(
         "sh.688001",
         "kcb",
-        [(target, 8.0, 10.0, 8.0, 10.0, 8.0, 100, 1000.0, 1)],
+        [(target, 8.0, 10.0, 8.0, 8.123, 8.0, 100, 1000.0, 1)],
     )
     manager.import_symbol_history(history, "kcb", target)
     manager.complete_initial_import({"sh.688001"}, target)
@@ -222,7 +222,7 @@ def test_kcb_query_objects_are_created_when_enabled(app_config) -> None:
     try:
         assert snapshot.query("SELECT count(*) AS n FROM kcb_daily_qfq")["n"][0].as_py() == 1
         pct_chg = snapshot.query("SELECT pct_chg FROM kcb_daily_qfq")["pct_chg"][0].as_py()
-        assert pct_chg == pytest.approx(25.0)
+        assert pct_chg == pytest.approx(1.54)
         assert snapshot.query("SELECT count(*) AS n FROM kcb_stock_list")["n"][0].as_py() == 1
     finally:
         snapshot.close()

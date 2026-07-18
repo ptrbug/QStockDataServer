@@ -752,7 +752,7 @@ class DuckDBManager:
                        high*qfq_factor AS high,
                        low*qfq_factor AS low,
                        close*qfq_factor AS close,
-                       (close/preclose-1.0)*100.0 AS pct_chg,
+                       round((close/preclose-1.0)*100.0, 2) AS pct_chg,
                        volume, amount, trade_status
                 FROM source_daily
                 """

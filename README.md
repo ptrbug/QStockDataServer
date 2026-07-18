@@ -47,7 +47,7 @@ zb_stock_list
 cyb_stock_list
 ```
 
-行情对象的列为 `symbol`、`date`、`open`、`high`、`low`、`close`、`pct_chg`、`volume`、`amount`、`trade_status`。其中 OHLC 已前复权，`pct_chg` 由磁盘行情的 `close/preclose` 计算；不对外提供 `preclose` 和 `qfq_factor`。
+行情对象的列为 `symbol`、`date`、`open`、`high`、`low`、`close`、`pct_chg`、`volume`、`amount`、`trade_status`。其中 OHLC 已前复权，`pct_chg` 由磁盘行情的 `close/preclose` 计算并四舍五入到两位小数；不对外提供 `preclose` 和 `qfq_factor`。
 
 将配置改为 `boards: [zb, cyb, kcb]` 后，统一对象 `daily_qfq` 和 `stock_list` 会包含科创板，并增加 `kcb_daily_qfq`、`kcb_stock_list` 两个分板块查询对象。每日仍只调用一次 `query_daily_history_k_AStock(date)`。
 
