@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import contextlib
+import sys
+import types
 from datetime import date
 
 import pandas as pd
@@ -149,3 +151,116 @@ def test_initialize_catches_up_after_fixed_target_initial_import(
     assert calls == [
         "schema", "login", "initial", "catch_up", "logout", "snapshot", "swap"
     ]
+
+
+def test_update_worker_launches_strategy_programs_after_snapshot_swap(
+    app_config, monkeypatch
+) -> None:
+    service = StockDataService(app_config)
+    calls: list[tuple[str, object]] = []
+
+    class Fetcher:
+        @contextlib.contextmanager
+        def session(self):
+            yield self
+
+    class Snapshot:
+        version = "2024-01-05"
+
+    class Database:
+        def build_snapshot(self) -> Snapshot:
+            calls.append(("build_snapshot", None))
+            return Snapshot()
+
+    class Snapshots:
+        def swap(self, snapshot: Snapshot) -> None:
+            calls.append(("swap", snapshot.version))
+
+    class Flight:
+        port = 18815
+
+    class Launcher:
+        def launch_all(self, *, flight_port: int, snapshot_version: str) -> None:
+            calls.append(("launch", (flight_port, snapshot_version)))
+
+    service.fetcher = Fetcher()  # type: ignore[assignment]
+    service.database = Database()  # type: ignore[assignment]
+    service.snapshots = Snapshots()  # type: ignore[assignment]
+    service._flight = Flight()  # type: ignore[assignment]
+    service.strategy_launcher = Launcher()  # type: ignore[assignment]
+    monkeypatch.setattr(service, "_catch_up", lambda: True)
+
+    service._update_worker("test-run")
+
+    assert calls == [
+        ("build_snapshot", None),
+        ("swap", "2024-01-05"),
+        ("launch", (18815, "2024-01-05")),
+    ]
+
+
+def test_serve_launches_strategy_programs_for_existing_startup_snapshot(
+    app_config, monkeypatch
+) -> None:
+    service = StockDataService(app_config)
+    calls: list[tuple[str, object]] = []
+
+    class Snapshots:
+        version = "2024-01-05"
+
+        def close(self) -> None:
+            calls.append(("snapshots_close", None))
+
+    class Fetcher:
+        def logout(self) -> None:
+            calls.append(("logout", None))
+
+    class Flight:
+        port = 19999
+
+        def __init__(self, *args, **kwargs) -> None:
+            calls.append(("flight_init", None))
+
+        def serve(self) -> None:
+            raise KeyboardInterrupt
+
+        def shutdown(self) -> None:
+            calls.append(("flight_shutdown", None))
+
+        def close(self) -> None:
+            calls.append(("flight_close", None))
+
+    class Scheduler:
+        def __init__(self, *, timezone) -> None:
+            calls.append(("scheduler_init", timezone))
+
+        def add_job(self, *args, **kwargs) -> None:
+            calls.append(("add_job", kwargs["id"]))
+
+        def start(self) -> None:
+            calls.append(("scheduler_start", None))
+
+        def shutdown(self, *, wait: bool) -> None:
+            calls.append(("scheduler_shutdown", wait))
+
+    class Launcher:
+        def launch_all(self, *, flight_port: int, snapshot_version: str) -> None:
+            calls.append(("launch", (flight_port, snapshot_version)))
+
+    apscheduler = types.ModuleType("apscheduler")
+    schedulers = types.ModuleType("apscheduler.schedulers")
+    background = types.ModuleType("apscheduler.schedulers.background")
+    background.BackgroundScheduler = Scheduler
+    monkeypatch.setitem(sys.modules, "apscheduler", apscheduler)
+    monkeypatch.setitem(sys.modules, "apscheduler.schedulers", schedulers)
+    monkeypatch.setitem(sys.modules, "apscheduler.schedulers.background", background)
+    monkeypatch.setattr("qstockdataserver.service.StockFlightServer", Flight)
+    service.snapshots = Snapshots()  # type: ignore[assignment]
+    service.fetcher = Fetcher()  # type: ignore[assignment]
+    service.strategy_launcher = Launcher()  # type: ignore[assignment]
+
+    assert service.serve() == 0
+    assert ("launch", (19999, "2024-01-05")) in calls
+    assert calls.index(("flight_init", None)) < calls.index(
+        ("launch", (19999, "2024-01-05"))
+    )

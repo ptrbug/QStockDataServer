@@ -48,9 +48,29 @@ def _resolve(base_dir: Path, value: Any, key: str) -> Path:
     return path.resolve()
 
 
+def _parse_bool(value: Any, key: str) -> bool:
+    if not isinstance(value, bool):
+        raise ConfigurationError(f"{key} 必须是布尔值")
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyProgramConfig:
+    name: str
+    command: tuple[str, ...]
+    cwd: Path | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyProgramsConfig:
+    enabled: bool
+    items: tuple[StrategyProgramConfig, ...]
+
+
 @dataclass(frozen=True, slots=True)
 class AppConfig:
     config_path: Path
+    strategy_config_path: Path
     database_path: Path
     boards: tuple[str, ...]
     start_date: date
@@ -71,6 +91,7 @@ class AppConfig:
     query_max_rows: int
     query_max_sql_length: int
     duckdb_threads: int
+    strategy_programs: StrategyProgramsConfig
 
     @property
     def fatal_marker_path(self) -> Path:
@@ -105,6 +126,67 @@ DEFAULTS: dict[str, Any] = {
 }
 
 
+def _parse_strategy_programs(base_dir: Path, value: Any) -> StrategyProgramsConfig:
+    if value is None:
+        return StrategyProgramsConfig(enabled=False, items=())
+    if not isinstance(value, dict):
+        raise ConfigurationError("strategy_programs 必须是映射")
+    enabled = _parse_bool(value.get("enabled", False), "strategy_programs.enabled")
+    raw_items = value.get("items", [])
+    if raw_items is None:
+        raw_items = []
+    if not isinstance(raw_items, list):
+        raise ConfigurationError("strategy_programs.items 必须是列表")
+
+    items: list[StrategyProgramConfig] = []
+    seen_names: set[str] = set()
+    for index, raw_item in enumerate(raw_items):
+        key = f"strategy_programs.items[{index}]"
+        if not isinstance(raw_item, dict):
+            raise ConfigurationError(f"{key} 必须是映射")
+        name = str(raw_item.get("name", "")).strip()
+        if not name:
+            raise ConfigurationError(f"{key}.name 不能为空")
+        if name in seen_names:
+            raise ConfigurationError(f"strategy_programs.items.name 不能重复：{name}")
+        seen_names.add(name)
+
+        raw_command = raw_item.get("command")
+        if (
+            not isinstance(raw_command, list)
+            or not raw_command
+            or any(not isinstance(part, str) or not part.strip() for part in raw_command)
+        ):
+            raise ConfigurationError(f"{key}.command 必须是非空字符串列表")
+        command = tuple(part.strip() for part in raw_command)
+
+        cwd = None
+        raw_cwd = raw_item.get("cwd")
+        if raw_cwd is not None:
+            cwd = _resolve(base_dir, raw_cwd, f"{key}.cwd")
+
+        items.append(StrategyProgramConfig(name=name, command=command, cwd=cwd))
+
+    return StrategyProgramsConfig(enabled=enabled, items=tuple(items))
+
+
+def _load_strategy_programs(path: Path) -> StrategyProgramsConfig:
+    try:
+        import yaml
+    except ImportError as exc:  # pragma: no cover - dependency error path
+        raise ConfigurationError("缺少 PyYAML，请先安装 requirements.txt") from exc
+
+    if not path.is_file():
+        return StrategyProgramsConfig(enabled=False, items=())
+    try:
+        loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        raise ConfigurationError(f"无法读取策略配置文件 {path}: {exc}") from exc
+    if not isinstance(loaded, dict):
+        raise ConfigurationError("strategy.yaml 顶层必须是 key/value 映射")
+    return _parse_strategy_programs(path.parent, loaded.get("strategy_programs"))
+
+
 def load_config(path: str | Path) -> AppConfig:
     try:
         import yaml
@@ -123,6 +205,8 @@ def load_config(path: str | Path) -> AppConfig:
 
     values = {**DEFAULTS, **loaded}
     base_dir = config_path.parent
+    strategy_config_path = base_dir / "strategy.yaml"
+    strategy_programs = _load_strategy_programs(strategy_config_path)
     try:
         timezone = ZoneInfo(str(values["timezone"]))
     except ZoneInfoNotFoundError as exc:
@@ -174,6 +258,7 @@ def load_config(path: str | Path) -> AppConfig:
 
     return AppConfig(
         config_path=config_path,
+        strategy_config_path=strategy_config_path,
         database_path=_resolve(base_dir, values["database_path"], "database_path"),
         boards=boards,
         start_date=_parse_date(values["start_date"], "start_date"),
@@ -200,4 +285,5 @@ def load_config(path: str | Path) -> AppConfig:
             values["query_max_sql_length"], "query_max_sql_length"
         ),
         duckdb_threads=_positive_int(values["duckdb_threads"], "duckdb_threads"),
+        strategy_programs=strategy_programs,
     )

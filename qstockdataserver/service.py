@@ -24,6 +24,7 @@ from .logging_config import (
     log_context,
     new_run_id,
 )
+from .strategy_launcher import StrategyProgramLauncher
 from .validation import validate_daily_pair
 
 
@@ -37,6 +38,7 @@ class StockDataService:
         self.fetcher = BaostockDataFetcher(config)
         self.snapshots = SnapshotManager()
         self.marker = FatalMarkerManager(config.fatal_marker_path)
+        self.strategy_launcher = StrategyProgramLauncher(config.strategy_programs)
         self._flight: StockFlightServer | None = None
         self._scheduler: Any | None = None
         self._update_lock = threading.Lock()
@@ -213,6 +215,8 @@ class StockDataService:
                     self.snapshots.swap(snapshot)
                     LOGGER.info("内存快照切换完成，版本=%s", snapshot.version)
                 self._set_state("ready")
+                if changed:
+                    self._launch_strategy_programs(snapshot.version)
         except BaseException as exc:
             if not isinstance(exc, QStockError):
                 exc = StorageError(f"未处理的更新异常：{exc}")
@@ -236,6 +240,14 @@ class StockDataService:
         thread.start()
         return True
 
+    def _launch_strategy_programs(self, snapshot_version: str | None) -> None:
+        if snapshot_version is None or self._flight is None:
+            return
+        self.strategy_launcher.launch_all(
+            flight_port=self._flight.port,
+            snapshot_version=snapshot_version,
+        )
+
     def serve(self) -> int:
         try:
             from apscheduler.schedulers.background import BackgroundScheduler
@@ -250,6 +262,7 @@ class StockDataService:
             status_provider=self.status,
             trigger_update=self.trigger_update,
         )
+        self._launch_strategy_programs(self.snapshots.version)
         self._scheduler = BackgroundScheduler(timezone=self.config.timezone)
         self._scheduler.add_job(
             self.scheduled_update,
