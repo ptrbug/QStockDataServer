@@ -52,6 +52,8 @@ CREATE TABLE IF NOT EXISTS daily (
     preclose       DOUBLE NOT NULL,
     volume         BIGINT NOT NULL,
     amount         DOUBLE NOT NULL,
+    turn           DOUBLE,
+    pct_chg        DOUBLE,
     trade_status   TINYINT NOT NULL,
     qfq_factor     DOUBLE NOT NULL DEFAULT 1.0,
     PRIMARY KEY (symbol, date)
@@ -362,6 +364,8 @@ class DuckDBManager:
             "preclose",
             "volume",
             "amount",
+            "turn",
+            "pct_chg",
             "trade_status",
             "qfq_factor",
         ]
@@ -439,7 +443,7 @@ class DuckDBManager:
             raise FatalDataError(f"新增股票 {symbol} 的证券信息与历史行情代码不一致")
         daily_columns = [
             "symbol", "date", "open", "high", "low", "close", "preclose",
-            "volume", "amount", "trade_status", "qfq_factor",
+            "volume", "amount", "turn", "pct_chg", "trade_status", "qfq_factor",
         ]
         connection.execute("DELETE FROM daily WHERE symbol=?", [symbol])
         connection.execute("DELETE FROM adjustment_events WHERE symbol=?", [symbol])
@@ -647,6 +651,8 @@ class DuckDBManager:
                     "preclose",
                     "volume",
                     "amount",
+                    "turn",
+                    "pct_chg",
                     "trade_status",
                     "qfq_factor",
                 ]
@@ -662,6 +668,8 @@ class DuckDBManager:
                         "preclose",
                         "volume",
                         "amount",
+                        "turn",
+                        "pct_chg",
                         "trade_status",
                     ],
                 ].copy()
@@ -752,8 +760,7 @@ class DuckDBManager:
                        round(high*qfq_factor, 2) AS high,
                        round(low*qfq_factor, 2) AS low,
                        round(close*qfq_factor, 2) AS close,
-                       round((close/preclose-1.0)*100.0, 2) AS pct_chg,
-                       volume, amount, trade_status
+                       volume, amount, turn, pct_chg, trade_status
                 FROM source_daily
                 """
             )

@@ -57,6 +57,8 @@ def test_initial_import_incremental_factor_and_snapshot(app_config) -> None:
             (date(2024, 1, 3), 8.0, 8.6, 7.9, 8.5, 8.0, 100, 850.0, 1),
         ],
     )
+    main["turn"] = [1.25, 1.5]
+    main["pct_chg"] = [0.0, 6.25]
     gem = make_daily(
         "sz.300001",
         "cyb",
@@ -73,7 +75,14 @@ def test_initial_import_incremental_factor_and_snapshot(app_config) -> None:
         factors = connection.execute(
             "SELECT date, qfq_factor FROM daily WHERE symbol='sh.600000' ORDER BY date"
         ).fetchall()
+        market_fields = connection.execute(
+            "SELECT turn, pct_chg FROM daily WHERE symbol='sh.600000' ORDER BY date"
+        ).fetchall()
     assert factors == [(date(2024, 1, 2), pytest.approx(0.8)), (date(2024, 1, 3), pytest.approx(1.0))]
+    assert market_fields == [
+        (pytest.approx(1.25), pytest.approx(0.0)),
+        (pytest.approx(1.5), pytest.approx(6.25)),
+    ]
 
     next_date = date(2024, 1, 4)
     next_daily = pd.concat(
@@ -134,8 +143,8 @@ def test_initial_import_incremental_factor_and_snapshot(app_config) -> None:
             "DESCRIBE zb_daily_qfq"
         ).fetchdf()["column_name"].tolist()
         assert qfq_columns == [
-            "symbol", "date", "open", "high", "low", "close", "pct_chg",
-            "volume", "amount", "trade_status",
+            "symbol", "date", "open", "high", "low", "close", "volume",
+            "amount", "turn", "pct_chg", "trade_status",
         ]
         view_sql = snapshot.connection.execute(
             "SELECT sql FROM duckdb_views() "
@@ -219,6 +228,7 @@ def test_kcb_query_objects_are_created_when_enabled(app_config) -> None:
         "kcb",
         [(target, 8.0, 10.0, 8.0, 8.123, 8.0, 100, 1000.0, 1)],
     )
+    history["pct_chg"] = 1.51
     manager.import_symbol_history(history, "kcb", target)
     manager.complete_initial_import({"sh.688001"}, target)
 
@@ -226,7 +236,7 @@ def test_kcb_query_objects_are_created_when_enabled(app_config) -> None:
     try:
         assert snapshot.query("SELECT count(*) AS n FROM kcb_daily_qfq")["n"][0].as_py() == 1
         pct_chg = snapshot.query("SELECT pct_chg FROM kcb_daily_qfq")["pct_chg"][0].as_py()
-        assert pct_chg == pytest.approx(1.54)
+        assert pct_chg == pytest.approx(1.51)
         assert snapshot.query("SELECT count(*) AS n FROM kcb_stock_list")["n"][0].as_py() == 1
     finally:
         snapshot.close()

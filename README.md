@@ -25,8 +25,8 @@ QStockDataServer/
 - 首次导入：先用 `query_all_stock(day)` 获取目标证券集合，再逐只调用 `query_history_k_data_plus(..., frequency="d", adjustflag="3")`，默认从 2018-01-01 开始。
 - 增量更新：只对最新目标交易日调用一次 `query_all_stock(day)` 更新证券列表；然后按缺失交易日逐日调用一次 `query_daily_history_k_AStock(date)` 获取全市场日 K。该接口包含主板、创业板和科创板，程序再按 `boards` 过滤，因此启用更多板块不会增加每日全市场接口的调用次数。即使一年未更新，也只需调用一次证券列表接口和约 240 次全市场日线接口。
 - 新增股票：将最新证券列表与本地列表比较，每只新增股票调用一次 `query_history_k_data_plus(..., frequency="d", adjustflag="3")` 回补完整历史。历史回补、最新证券列表和目标日日 K 在同一事务提交；目标日逐字段不一致会整体回滚。
-- 正式存储：磁盘表 `daily` 保存所有已启用板块的不复权 OHLC、`preclose`、成交量、成交额及 `qfq_factor`；`stock_list` 保存统一证券列表。
-- 查询：内存表 `daily_qfq` 保存所有已启用板块的前复权行情；默认同时提供 `zb_daily_qfq`、`cyb_daily_qfq`、`zb_stock_list`、`cyb_stock_list`。启用 `kcb` 后还会提供 `kcb_daily_qfq` 和 `kcb_stock_list`。行情查询对象不包含 `preclose`，`pct_chg` 在构建快照时按 `(close/preclose-1)*100` 计算。
+- 正式存储：磁盘表 `daily` 保存所有已启用板块的不复权 OHLC、`preclose`、成交量、成交额、换手率 `turn`、涨跌幅 `pct_chg` 及 `qfq_factor`；`stock_list` 保存统一证券列表。
+- 查询：内存表 `daily_qfq` 保存所有已启用板块的前复权行情；默认同时提供 `zb_daily_qfq`、`cyb_daily_qfq`、`zb_stock_list`、`cyb_stock_list`。启用 `kcb` 后还会提供 `kcb_daily_qfq` 和 `kcb_stock_list`。行情查询对象不包含 `preclose`，`pct_chg` 直接使用磁盘行情中的原始值。
 
 BaoStock 的接口实际会把部分停牌证券的 `volume`、`amount` 返回为空，个别历史停牌日还会在 `amount=0` 时残留上一交易日的非零 `volume`。程序仅在 `tradestatus=0`、OHLC 相等且成交额为 0 时把停牌成交量规范化为 0，随后仍强制检查停牌 OHLC 相等且量额为 0；正常交易证券出现空量额，或停牌日存在非零成交额/不同价格，都会立即中止。
 
@@ -61,7 +61,7 @@ zb_stock_list
 cyb_stock_list
 ```
 
-行情对象的列为 `symbol`、`date`、`open`、`high`、`low`、`close`、`pct_chg`、`volume`、`amount`、`trade_status`。其中 OHLC 已前复权，`pct_chg` 由磁盘行情的 `close/preclose` 计算并四舍五入到两位小数；不对外提供 `preclose` 和 `qfq_factor`。
+行情对象的列为 `symbol`、`date`、`open`、`high`、`low`、`close`、`volume`、`amount`、`turn`、`pct_chg`、`trade_status`。其中 OHLC 已前复权，`pct_chg` 和 `turn` 使用磁盘行情保存的原始值；不对外提供 `preclose` 和 `qfq_factor`。
 
 将配置改为 `boards: [zb, cyb, kcb]` 后，统一对象 `daily_qfq` 和 `stock_list` 会包含科创板，并增加 `kcb_daily_qfq`、`kcb_stock_list` 两个分板块查询对象。每日仍只调用一次 `query_daily_history_k_AStock(date)`。
 
