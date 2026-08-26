@@ -85,7 +85,7 @@ DEFAULTS: dict[str, Any] = {
     "database_path": "data/stock_daily.duckdb",
     "boards": ["zb", "cyb"],
     "start_date": "2018-01-01",
-    "update_time": "18:30",
+    "update_time": "17:31",
     "timezone": "Asia/Shanghai",
     "retry_delays_seconds": [3, 30, 120, 300],
     "max_retries": 12,

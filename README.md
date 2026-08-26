@@ -104,7 +104,7 @@ boards: [zb, cyb, kcb]
 | `database_path`        | `data/stock_daily.duckdb`         | 磁盘 DuckDB                                    |
 | `boards`               | `[zb, cyb]`                       | 启用板块；可选 `zb`、`cyb`、`kcb`              |
 | `start_date`           | `2018-01-01`                      | 首次导入起始日                                 |
-| `update_time`          | `18:30`                           | 每日调度时间                                   |
+| `update_time`          | `17:31`                           | 每日调度时间                                   |
 | `timezone`             | `Asia/Shanghai`                   | 调度时区                                       |
 | `retry_delays_seconds` | `[3, 30, 120, 300]`               | 各次失败后的退避秒数；列表耗尽后复用最后一个值 |
 | `max_retries`          | `12`                              | 每次 API 调用最大尝试次数                      |

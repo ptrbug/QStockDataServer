@@ -16,7 +16,7 @@ def app_config(tmp_path: Path) -> AppConfig:
                 'database_path: "data/test.duckdb"',
                 "boards: [zb, cyb]",
                 'start_date: "2018-01-01"',
-                'update_time: "18:30"',
+                'update_time: "17:31"',
                 'timezone: "Asia/Shanghai"',
                 "retry_delays_seconds: [0, 0]",
                 "max_retries: 2",
