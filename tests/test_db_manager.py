@@ -143,9 +143,14 @@ def test_initial_import_incremental_factor_and_snapshot(app_config) -> None:
             "DESCRIBE zb_daily_qfq"
         ).fetchdf()["column_name"].tolist()
         assert qfq_columns == [
-            "symbol", "date", "open", "high", "low", "close", "volume",
-            "amount", "turn", "pct_chg", "trade_status",
+            "symbol", "date", "open", "high", "low", "close", "raw_close",
+            "raw_preclose", "volume", "amount", "turn", "pct_chg", "trade_status",
         ]
+        raw_prices = snapshot.connection.execute(
+            "SELECT raw_close, raw_preclose FROM daily_qfq "
+            "WHERE symbol='sh.600000' AND date='2024-01-05'"
+        ).fetchone()
+        assert raw_prices == (pytest.approx(6.9), pytest.approx(6.88))
         view_sql = snapshot.connection.execute(
             "SELECT sql FROM duckdb_views() "
             "WHERE view_name='zb_daily_qfq'"
