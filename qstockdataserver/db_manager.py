@@ -760,10 +760,14 @@ class DuckDBManager:
                        round(high*qfq_factor, 2) AS high,
                        round(low*qfq_factor, 2) AS low,
                        round(close*qfq_factor, 2) AS close,
+                       open AS raw_open,
+                       high AS raw_high,
+                       low AS raw_low,
                        close AS raw_close,
                        preclose AS raw_preclose,
+                       qfq_factor,
                        volume, amount, turn, pct_chg, trade_status
-                FROM source_daily
+                FROM source_dailyd
                 """
             )
             memory.unregister("source_daily")
