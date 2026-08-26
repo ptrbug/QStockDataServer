@@ -767,7 +767,7 @@ class DuckDBManager:
                        preclose AS raw_preclose,
                        qfq_factor,
                        volume, amount, turn, pct_chg, trade_status
-                FROM source_dailyd
+                FROM source_daily
                 """
             )
             memory.unregister("source_daily")
