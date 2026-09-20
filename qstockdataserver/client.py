@@ -14,7 +14,7 @@ class StockDataClient:
     def __init__(
         self,
         host: str = "127.0.0.1",
-        port: int = 8815,
+        port: int = 18815,
         *,
         timeout_seconds: float = 60.0,
     ) -> None:

@@ -42,13 +42,13 @@ F[i-1] = F[i] * preclose[i] / close[i-1]
 
 磁盘 DuckDB 使用统一表，不按板块拆分：
 
-| 对象 | 用途 |
-| ---- | ---- |
-| `daily` | 所有已采集板块的不复权日线和前复权因子 |
-| `stock_list` | 所有已采集板块的证券列表 |
-| `adjustment_events` | 除权除息事件 |
-| `initial_import_progress` | 首次导入断点 |
-| `meta` | 最近更新日期等运行状态 |
+| 对象                      | 用途                                   |
+| ------------------------- | -------------------------------------- |
+| `daily`                   | 所有已采集板块的不复权日线和前复权因子 |
+| `stock_list`              | 所有已采集板块的证券列表               |
+| `adjustment_events`       | 除权除息事件                           |
+| `initial_import_progress` | 首次导入断点                           |
+| `meta`                    | 最近更新日期等运行状态                 |
 
 Arrow Flight 只开放内存快照中的查询对象。默认 `boards: [zb, cyb]` 时共有以下 6 个：
 
@@ -115,7 +115,7 @@ boards: [zb, cyb, kcb]
 | `session_max_minutes`  | `30`                              | BaoStock 会话最长连续使用时间                  |
 | `factor_epsilon`       | `1e-10`                           | 复权因子比较误差                               |
 | `flight_host`          | `127.0.0.1`                       | 只允许回环地址；服务没有远程认证               |
-| `flight_port`          | `8815`                            | Arrow Flight TCP 端口                          |
+| `flight_port`          | `18815`                           | Arrow Flight TCP 端口                          |
 | `query_max_rows`       | `50000000`                        | 单次查询最大返回行数                           |
 | `runtime_dir`          | `runtime`                         | 锁文件和致命标记目录                           |
 | `log_path`             | `logs/qstockdataserver.log`       | 滚动主日志                                     |
@@ -147,14 +147,14 @@ Linux：
 
 默认 `boards: [zb, cyb]` 支持查询以下对象：
 
-| 查询对象 | 内容 |
-| -------- | ---- |
-| `daily_qfq` | 主板和创业板全部前复权日线 |
-| `zb_daily_qfq` | 主板前复权日线 |
-| `cyb_daily_qfq` | 创业板前复权日线 |
-| `stock_list` | 主板和创业板全部证券列表 |
-| `zb_stock_list` | 主板证券列表 |
-| `cyb_stock_list` | 创业板证券列表 |
+| 查询对象         | 内容                       |
+| ---------------- | -------------------------- |
+| `daily_qfq`      | 主板和创业板全部前复权日线 |
+| `zb_daily_qfq`   | 主板前复权日线             |
+| `cyb_daily_qfq`  | 创业板前复权日线           |
+| `stock_list`     | 主板和创业板全部证券列表   |
+| `zb_stock_list`  | 主板证券列表               |
+| `cyb_stock_list` | 创业板证券列表             |
 
 配置包含 `kcb` 时，`daily_qfq`、`stock_list` 会自动包含科创板，同时增加 `kcb_daily_qfq` 和 `kcb_stock_list`。
 

@@ -92,7 +92,7 @@ DEFAULTS: dict[str, Any] = {
     "session_max_minutes": 30,
     "factor_epsilon": 1.0e-10,
     "flight_host": "127.0.0.1",
-    "flight_port": 8815,
+    "flight_port": 18815,
     "runtime_dir": "runtime",
     "log_path": "logs/qstockdataserver.log",
     "error_log_path": "logs/qstockdataserver.error.log",
